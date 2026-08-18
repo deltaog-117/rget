@@ -14,14 +14,11 @@ fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
 
-    // Validate URL
     let url = validate_url(&args.url)?;
 
-    // Determine output filename
     let output_path = if let Some(name) = args.output {
         name
     } else {
-        // Extract filename from URL
         url.path_segments()
             .and_then(|segments| segments.last())
             .filter(|&name| !name.is_empty())
@@ -29,7 +26,6 @@ fn main() -> Result<()> {
             .to_string()
     };
 
-    // Verbose logging
     if args.verbose > 0 {
         eprintln!("🔍 Downloading: {}", url);
         eprintln!("📁 Output: {}", output_path);
@@ -37,9 +33,11 @@ fn main() -> Result<()> {
         if args.resume {
             eprintln!("🔄 Resume: enabled");
         }
+        if args.retries > 0 {
+            eprintln!("🔁 Retries: {}", args.retries);
+        }
     }
 
-    // Download!
     download_file(
         &args.url,
         &output_path,
@@ -47,6 +45,7 @@ fn main() -> Result<()> {
         args.timeout,
         args.follow_redirects,
         args.user_agent.as_deref(),
+        args.retries,
     )?;
 
     Ok(())

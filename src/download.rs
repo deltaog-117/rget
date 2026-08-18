@@ -1,11 +1,62 @@
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::thread;
+use std::time::Duration;
 use reqwest::blocking::Client;
 use reqwest::header::{RANGE, USER_AGENT};
 use crate::error::{Result, RgetError};
 use crate::progress::ProgressBarWrapper;
 
 pub fn download_file(
+    url: &str,
+    output_path: &str,
+    resume: bool,
+    timeout: u64,
+    follow_redirects: bool,
+    user_agent: Option<&str>,
+    retries: u32,
+) -> Result<()> {
+    let mut attempt = 0;
+    let max_attempts = retries + 1; // Initial attempt + retries
+
+    loop {
+        attempt += 1;
+        let result = attempt_download(
+            url,
+            output_path,
+            resume,
+            timeout,
+            follow_redirects,
+            user_agent,
+        );
+
+        match result {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                // If we've used all attempts, return the error
+                if attempt >= max_attempts {
+                    eprintln!("❌ Failed after {} attempts", attempt);
+                    return Err(e);
+                }
+
+                // Calculate backoff with jitter
+                let base_delay = 2u64.pow(attempt - 1); // 1, 2, 4, 8, 16...
+                let jitter = rand::random::<u64>() % 1000; // 0-999ms jitter
+                let delay = Duration::from_secs(base_delay) + Duration::from_millis(jitter);
+
+                eprintln!(
+                    "⚠️  Attempt {} failed: {}. Retrying in {}s...",
+                    attempt,
+                    e,
+                    delay.as_secs()
+                );
+                thread::sleep(delay);
+            }
+        }
+    }
+}
+
+fn attempt_download(
     url: &str,
     output_path: &str,
     resume: bool,
