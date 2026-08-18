@@ -1,8 +1,8 @@
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::Write;
 use reqwest::blocking::Client;
 use reqwest::header::{RANGE, USER_AGENT};
-use crate::error::Result;
+use crate::error::{Result, RgetError};
 use crate::progress::ProgressBarWrapper;
 
 pub fn download_file(
@@ -48,6 +48,17 @@ pub fn download_file(
 
     // Send request
     let response = request_builder.send()?;
+
+    // If redirects are disabled, check if we got a redirect
+    if !follow_redirects && response.status().is_redirection() {
+        let status = response.status().as_u16();
+        let location = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("unknown");
+        return Err(RgetError::RedirectDisabled(status, location.to_string()));
+    }
 
     // Check if server supports resume
     if resume && existing_size > 0 {
