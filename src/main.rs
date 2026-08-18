@@ -3,6 +3,7 @@ mod download;
 mod validator;
 mod progress;
 mod error;
+mod checksum;
 
 use clap::Parser;
 use cli::Args;
@@ -36,6 +37,9 @@ fn main() -> Result<()> {
         if args.retries > 0 {
             eprintln!("🔁 Retries: {}", args.retries);
         }
+        if args.sha256.is_some() {
+            eprintln!("🔐 SHA‑256 verification: enabled");
+        }
     }
 
     download_file(
@@ -48,6 +52,17 @@ fn main() -> Result<()> {
         args.retries,
         args.quiet,
     )?;
+
+    // Verify SHA‑256 if provided
+    if let Some(expected) = args.sha256 {
+        if !args.quiet {
+            eprintln!("🔐 Verifying SHA‑256 checksum...");
+        }
+        checksum::verify_sha256(&output_path, &expected)?;
+        if !args.quiet {
+            eprintln!("✅ SHA‑256 checksum verified");
+        }
+    }
 
     Ok(())
 }

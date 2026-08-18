@@ -21,4 +21,7 @@ pub struct Args {
     pub retries: u32,
     #[arg(short = 'q', long)]
     pub quiet: bool,
+    #[arg(long)]
+    pub sha256: Option<String>,
+    // #[arg(long)] pub md5: Option<String>,   // REMOVED
 }
