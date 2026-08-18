@@ -19,4 +19,6 @@ pub struct Args {
     pub user_agent: Option<String>,
     #[arg(short = 'r', long, default_value = "0")]
     pub retries: u32,
+    #[arg(short = 'q', long)]
+    pub quiet: bool,
 }

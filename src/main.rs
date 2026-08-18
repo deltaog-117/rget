@@ -26,7 +26,7 @@ fn main() -> Result<()> {
             .to_string()
     };
 
-    if args.verbose > 0 {
+    if !args.quiet && args.verbose > 0 {
         eprintln!("🔍 Downloading: {}", url);
         eprintln!("📁 Output: {}", output_path);
         eprintln!("⏱️  Timeout: {}s", args.timeout);
@@ -46,6 +46,7 @@ fn main() -> Result<()> {
         args.follow_redirects,
         args.user_agent.as_deref(),
         args.retries,
+        args.quiet,
     )?;
 
     Ok(())
