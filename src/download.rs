@@ -6,6 +6,7 @@ use reqwest::blocking::Client;
 use reqwest::header::{RANGE, USER_AGENT};
 use crate::error::{Result, RgetError};
 use crate::progress::ProgressBarWrapper;
+use indicatif::MultiProgress;
 
 pub fn download_file(
     url: &str,
@@ -16,6 +17,7 @@ pub fn download_file(
     user_agent: Option<&str>,
     retries: u32,
     quiet: bool,
+    multi_progress: Option<&MultiProgress>,
 ) -> Result<()> {
     let mut attempt = 0;
     let max_attempts = retries + 1;
@@ -30,6 +32,7 @@ pub fn download_file(
             follow_redirects,
             user_agent,
             quiet,
+            multi_progress,
         );
 
         match result {
@@ -68,6 +71,7 @@ fn attempt_download(
     follow_redirects: bool,
     user_agent: Option<&str>,
     quiet: bool,
+    multi_progress: Option<&MultiProgress>,
 ) -> Result<()> {
     let mut client_builder = Client::builder()
         .timeout(std::time::Duration::from_secs(timeout))
@@ -138,9 +142,13 @@ fn attempt_download(
             .open(output_path)?
     };
 
-    // Only create progress bar if not quiet
+    // Create progress bar
     let progress = if !quiet {
-        Some(ProgressBarWrapper::new(total_size, existing_size))
+        let wrapper = ProgressBarWrapper::new(total_size, existing_size);
+        if let Some(mp) = multi_progress {
+            mp.add(wrapper.get_bar().clone());
+        }
+        Some(wrapper)
     } else {
         None
     };

@@ -33,4 +33,8 @@ impl ProgressBarWrapper {
     pub fn finish(&self) {
         self.bar.finish();
     }
+
+    pub fn get_bar(&self) -> &ProgressBar {
+        &self.bar
+    }
 }
