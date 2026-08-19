@@ -4,6 +4,7 @@ mod validator;
 mod progress;
 mod error;
 mod checksum;
+mod config;
 
 use clap::Parser;
 use cli::Args;
@@ -18,6 +19,22 @@ use std::thread;
 fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
+
+    // Load config if not disabled
+    let config = if !args.no_config {
+        config::Config::load()
+    } else {
+        config::Config::default()
+    };
+
+    // Merge CLI args with config (CLI takes precedence)
+    let timeout = args.timeout.unwrap_or_else(|| config.timeout.unwrap_or(30));
+    let retries = args.retries.unwrap_or_else(|| config.retries.unwrap_or(0));
+    let user_agent = args.user_agent.or_else(|| config.user_agent.clone());
+    let quiet = args.quiet || config.quiet.unwrap_or(false);
+    let jobs = args.jobs.unwrap_or_else(|| config.jobs.unwrap_or(1));
+    let follow_redirects = args.follow_redirects.unwrap_or_else(|| config.follow_redirects.unwrap_or(true));
+    let resume = args.resume || config.resume.unwrap_or(false);
 
     // Validate number of URLs and -O usage
     if args.urls.len() > 1 && args.output.is_some() {
@@ -42,37 +59,40 @@ fn main() -> Result<()> {
     }
 
     // If verbose, print summary
-    if !args.quiet && args.verbose > 0 {
+    if !quiet && args.verbose > 0 {
         eprintln!("🔍 Downloading {} URL(s)", tasks.len());
-        eprintln!("⏱️  Timeout: {}s", args.timeout);
-        if args.resume {
+        eprintln!("⏱️  Timeout: {}s", timeout);
+        if resume {
             eprintln!("🔄 Resume: enabled");
         }
-        if args.retries > 0 {
-            eprintln!("🔁 Retries: {}", args.retries);
+        if retries > 0 {
+            eprintln!("🔁 Retries: {}", retries);
         }
         if args.sha256.is_some() && tasks.len() == 1 {
             eprintln!("🔐 SHA‑256 verification: enabled");
         } else if args.sha256.is_some() && tasks.len() > 1 {
             eprintln!("⚠️  SHA‑256 verification only supported with a single URL, ignoring");
         }
-        if args.jobs > 1 {
-            eprintln!("📦 Parallel jobs: {}", args.jobs);
+        if jobs > 1 {
+            eprintln!("📦 Parallel jobs: {}", jobs);
+        }
+        if !args.no_config {
+            eprintln!("⚙️  Config: ~/.config/rget/config.toml");
         }
     }
 
     // Prepare shared config
     let config = Arc::new((
-        args.resume,
-        args.timeout,
-        args.follow_redirects,
-        args.user_agent,
-        args.retries,
-        args.quiet,
+        resume,
+        timeout,
+        follow_redirects,
+        user_agent,
+        retries,
+        quiet,
     ));
 
     // Create a MultiProgress if we have multiple jobs
-    let multi_progress = if args.jobs > 1 {
+    let multi_progress = if jobs > 1 {
         Some(MultiProgress::new())
     } else {
         None
@@ -84,13 +104,12 @@ fn main() -> Result<()> {
 
     // Spawn worker threads
     let mut handles = Vec::new();
-    for _ in 0..args.jobs {
+    for _ in 0..jobs {
         let task_receiver = task_receiver.clone();
         let result_sender = result_sender.clone();
         let config = config.clone();
         let multi_progress = multi_progress.as_ref().map(|mp| mp.clone());
         let handle = thread::spawn(move || {
-            // Clone the config so we can move it into the closure
             let (resume, timeout, follow_redirects, user_agent, retries, quiet) = &*config;
             while let Ok((url, output_path)) = task_receiver.recv() {
                 let result = download_file(
@@ -122,7 +141,7 @@ fn main() -> Result<()> {
         let (url, output, result) = result_receiver.recv().unwrap();
         match result {
             Ok(()) => {
-                if !args.quiet {
+                if !quiet {
                     eprintln!("✅ {} -> {}", url, output);
                 }
             }
@@ -151,11 +170,11 @@ fn main() -> Result<()> {
                     .unwrap_or("downloaded")
                     .to_string()
             };
-            if !args.quiet {
+            if !quiet {
                 eprintln!("🔐 Verifying SHA‑256 checksum...");
             }
             checksum::verify_sha256(&output_path, &expected)?;
-            if !args.quiet {
+            if !quiet {
                 eprintln!("✅ SHA‑256 checksum verified");
             }
         }

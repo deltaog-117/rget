@@ -21,20 +21,20 @@ pub struct Args {
     pub verbose: u8,
 
     /// Timeout in seconds (default: 30)
-    #[arg(short = 't', long, default_value = "30")]
-    pub timeout: u64,
+    #[arg(short = 't', long)]
+    pub timeout: Option<u64>,
 
     /// Follow redirects (default: true)
-    #[arg(long, default_value = "true", action = clap::ArgAction::Set, value_parser = clap::value_parser!(bool))]
-    pub follow_redirects: bool,
+    #[arg(long)]
+    pub follow_redirects: Option<bool>,
 
     /// Custom user-agent
     #[arg(short = 'A', long)]
     pub user_agent: Option<String>,
 
     /// Number of retries on failure (default: 0)
-    #[arg(short = 'r', long, default_value = "0")]
-    pub retries: u32,
+    #[arg(short = 'r', long)]
+    pub retries: Option<u32>,
 
     /// Quiet mode (no output except errors)
     #[arg(short = 'q', long)]
@@ -45,6 +45,10 @@ pub struct Args {
     pub sha256: Option<String>,
 
     /// Number of parallel downloads (default: 1)
-    #[arg(short = 'j', long, default_value = "1")]
-    pub jobs: usize,
+    #[arg(short = 'j', long)]
+    pub jobs: Option<usize>,
+
+    /// Ignore config file
+    #[arg(long)]
+    pub no_config: bool,
 }
