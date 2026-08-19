@@ -53,7 +53,7 @@ fn parse_size(s: &str) -> Result<usize, String> {
 #[command(about = "A safe, modern downloader for Linux", long_about = None)]
 pub struct Args {
     /// URLs to download (can specify multiple)
-    #[arg(required = true)]
+    #[arg()]
     pub urls: Vec<String>,
 
     /// Output filename (only valid with a single URL)
@@ -103,4 +103,8 @@ pub struct Args {
     /// Ignore config file
     #[arg(long)]
     pub no_config: bool,
+
+    /// Generate a default configuration file and exit
+    #[arg(long)]
+    pub init: bool,
 }

@@ -20,6 +20,28 @@ fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
 
+    // --- HANDLE --init ---
+    if args.init {
+        match config::Config::write_default_config() {
+            Ok(()) => {
+                eprintln!("🎉 You can now customize ~/.config/rget/config.toml");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("❌ Failed to write config: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // --- VALIDATE URLS ---
+    if args.urls.is_empty() {
+        eprintln!("Error: At least one URL is required");
+        eprintln!("Usage: rget [OPTIONS] <URL> [URL...]");
+        eprintln!("       rget --init");
+        std::process::exit(1);
+    }
+
     // Load config if not disabled
     let config = if !args.no_config {
         config::Config::load()
