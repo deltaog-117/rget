@@ -35,6 +35,7 @@ fn main() -> Result<()> {
     let jobs = args.jobs.unwrap_or_else(|| config.jobs.unwrap_or(1));
     let follow_redirects = args.follow_redirects.unwrap_or_else(|| config.follow_redirects.unwrap_or(true));
     let resume = args.resume || config.resume.unwrap_or(false);
+    let limit_rate = args.limit_rate.or_else(|| config.limit_rate);
 
     // Validate number of URLs and -O usage
     if args.urls.len() > 1 && args.output.is_some() {
@@ -76,6 +77,10 @@ fn main() -> Result<()> {
         if jobs > 1 {
             eprintln!("📦 Parallel jobs: {}", jobs);
         }
+        if let Some(limit) = limit_rate {
+            let limit_str = format_size(limit);
+            eprintln!("🚀 Rate limit: {}/s", limit_str);
+        }
         if !args.no_config {
             eprintln!("⚙️  Config: ~/.config/rget/config.toml");
         }
@@ -89,6 +94,7 @@ fn main() -> Result<()> {
         user_agent,
         retries,
         quiet,
+        limit_rate,
     ));
 
     // Create a MultiProgress if we have multiple jobs
@@ -110,7 +116,7 @@ fn main() -> Result<()> {
         let config = config.clone();
         let multi_progress = multi_progress.as_ref().map(|mp| mp.clone());
         let handle = thread::spawn(move || {
-            let (resume, timeout, follow_redirects, user_agent, retries, quiet) = &*config;
+            let (resume, timeout, follow_redirects, user_agent, retries, quiet, limit_rate) = &*config;
             while let Ok((url, output_path)) = task_receiver.recv() {
                 let result = download_file(
                     &url,
@@ -122,6 +128,7 @@ fn main() -> Result<()> {
                     *retries,
                     *quiet,
                     multi_progress.as_ref(),
+                    *limit_rate,
                 );
                 let _ = result_sender.send((url, output_path, result));
             }
@@ -184,4 +191,16 @@ fn main() -> Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Format bytes into human-readable size (e.g., 1.5 MB)
+fn format_size(bytes: usize) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    format!("{:.1} {}", size, UNITS[unit])
 }

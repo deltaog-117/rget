@@ -1,7 +1,7 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use reqwest::blocking::Client;
 use reqwest::header::{RANGE, USER_AGENT};
 use crate::error::{Result, RgetError};
@@ -18,6 +18,7 @@ pub fn download_file(
     retries: u32,
     quiet: bool,
     multi_progress: Option<&MultiProgress>,
+    limit_rate: Option<usize>,
 ) -> Result<()> {
     let mut attempt = 0;
     let max_attempts = retries + 1;
@@ -33,6 +34,7 @@ pub fn download_file(
             user_agent,
             quiet,
             multi_progress,
+            limit_rate,
         );
 
         match result {
@@ -72,6 +74,7 @@ fn attempt_download(
     user_agent: Option<&str>,
     quiet: bool,
     multi_progress: Option<&MultiProgress>,
+    limit_rate: Option<usize>,
 ) -> Result<()> {
     let mut client_builder = Client::builder()
         .timeout(std::time::Duration::from_secs(timeout))
@@ -153,8 +156,29 @@ fn attempt_download(
         None
     };
 
+    // --- RATE LIMITING ---
+    let mut bytes_written_this_second = 0;
+    let mut second_start = Instant::now();
+    let chunk_size = 8192;
+
     let bytes = response.bytes()?;
-    for chunk in bytes.chunks(8192) {
+    for chunk in bytes.chunks(chunk_size) {
+        // Apply rate limiting
+        if let Some(limit) = limit_rate {
+            if limit > 0 {
+                bytes_written_this_second += chunk.len() as usize;
+                if bytes_written_this_second >= limit {
+                    let elapsed = second_start.elapsed();
+                    if elapsed < Duration::from_secs(1) {
+                        let sleep_time = Duration::from_secs(1) - elapsed;
+                        thread::sleep(sleep_time);
+                    }
+                    bytes_written_this_second = 0;
+                    second_start = Instant::now();
+                }
+            }
+        }
+
         file.write_all(chunk)?;
         if let Some(ref p) = progress {
             p.inc(chunk.len() as u64);
