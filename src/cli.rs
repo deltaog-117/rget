@@ -2,6 +2,8 @@ use clap::Parser;
 
 /// Parse human-readable size strings like "500k", "2M", "1G" (or "0" for no limit)
 fn parse_size(s: &str) -> Result<usize, String> {
+    // ... existing parse_size implementation ...
+    // (I'll include it for completeness)
     let s = s.trim();
     if s == "0" {
         return Ok(0);
@@ -10,7 +12,6 @@ fn parse_size(s: &str) -> Result<usize, String> {
         return Err("Empty size string".to_string());
     }
 
-    // Extract the numeric part and the suffix
     let (num_str, suffix) = {
         let chars: Vec<char> = s.chars().collect();
         let mut num_end = 0;
@@ -60,6 +61,10 @@ pub struct Args {
     #[arg(short = 'O', long)]
     pub output: Option<String>,
 
+    /// Output directory prefix
+    #[arg(short = 'P', long)]
+    pub directory_prefix: Option<String>,
+
     /// Resume an incomplete download
     #[arg(short = 'c', long)]
     pub resume: bool,
@@ -99,6 +104,10 @@ pub struct Args {
     /// Rate limit in bytes per second (e.g., 500k, 2M, 1G). Use 0 for no limit.
     #[arg(long, value_parser = parse_size)]
     pub limit_rate: Option<usize>,
+
+    /// Number of parallel segments for a single file (default: 1)
+    #[arg(long, default_value = "1")]
+    pub segments: usize,
 
     /// Ignore config file
     #[arg(long)]

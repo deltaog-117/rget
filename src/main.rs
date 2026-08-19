@@ -15,12 +15,12 @@ use indicatif::MultiProgress;
 use crossbeam_channel::unbounded;
 use std::sync::Arc;
 use std::thread;
+use std::path::Path;
 
 fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
 
-    // --- HANDLE --init ---
     if args.init {
         match config::Config::write_default_config() {
             Ok(()) => {
@@ -34,7 +34,6 @@ fn main() -> Result<()> {
         }
     }
 
-    // --- VALIDATE URLS ---
     if args.urls.is_empty() {
         eprintln!("Error: At least one URL is required");
         eprintln!("Usage: rget [OPTIONS] <URL> [URL...]");
@@ -42,14 +41,17 @@ fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    // Load config if not disabled
+    if args.segments > 1 && args.urls.len() > 1 {
+        eprintln!("Error: --segments can only be used with a single URL");
+        std::process::exit(1);
+    }
+
     let config = if !args.no_config {
         config::Config::load()
     } else {
         config::Config::default()
     };
 
-    // Merge CLI args with config (CLI takes precedence)
     let timeout = args.timeout.unwrap_or_else(|| config.timeout.unwrap_or(30));
     let retries = args.retries.unwrap_or_else(|| config.retries.unwrap_or(0));
     let user_agent = args.user_agent.or_else(|| config.user_agent.clone());
@@ -58,18 +60,18 @@ fn main() -> Result<()> {
     let follow_redirects = args.follow_redirects.unwrap_or_else(|| config.follow_redirects.unwrap_or(true));
     let resume = args.resume || config.resume.unwrap_or(false);
     let limit_rate = args.limit_rate.or_else(|| config.limit_rate);
+    let segments = if args.segments > 1 { args.segments } else { config.segments.unwrap_or(1) };
+    let directory_prefix = args.directory_prefix.or_else(|| config.directory_prefix.clone());
 
-    // Validate number of URLs and -O usage
     if args.urls.len() > 1 && args.output.is_some() {
         eprintln!("Error: -O can only be used with a single URL");
         std::process::exit(1);
     }
 
-    // Build list of tasks: (url, output_path)
     let mut tasks: Vec<(String, String)> = Vec::new();
     for url_str in &args.urls {
         let url = validate_url(url_str)?;
-        let output_path = if let Some(name) = &args.output {
+        let base_name = if let Some(name) = &args.output {
             name.clone()
         } else {
             url.path_segments()
@@ -78,10 +80,20 @@ fn main() -> Result<()> {
                 .unwrap_or("downloaded")
                 .to_string()
         };
+
+        let output_path = if let Some(prefix) = &directory_prefix {
+            let dir = Path::new(prefix);
+            if !dir.exists() {
+                std::fs::create_dir_all(dir)?;
+            }
+            dir.join(&base_name).to_string_lossy().to_string()
+        } else {
+            base_name
+        };
+
         tasks.push((url_str.clone(), output_path));
     }
 
-    // If verbose, print summary
     if !quiet && args.verbose > 0 {
         eprintln!("🔍 Downloading {} URL(s)", tasks.len());
         eprintln!("⏱️  Timeout: {}s", timeout);
@@ -99,16 +111,21 @@ fn main() -> Result<()> {
         if jobs > 1 {
             eprintln!("📦 Parallel jobs: {}", jobs);
         }
+        if segments > 1 {
+            eprintln!("🧩 Segments: {}", segments);
+        }
         if let Some(limit) = limit_rate {
             let limit_str = format_size(limit);
             eprintln!("🚀 Rate limit: {}/s", limit_str);
+        }
+        if let Some(prefix) = &directory_prefix {
+            eprintln!("📂 Output directory: {}", prefix);
         }
         if !args.no_config {
             eprintln!("⚙️  Config: ~/.config/rget/config.toml");
         }
     }
 
-    // Prepare shared config
     let config = Arc::new((
         resume,
         timeout,
@@ -117,20 +134,18 @@ fn main() -> Result<()> {
         retries,
         quiet,
         limit_rate,
+        segments,
     ));
 
-    // Create a MultiProgress if we have multiple jobs
     let multi_progress = if jobs > 1 {
         Some(MultiProgress::new())
     } else {
         None
     };
 
-    // Create channels for tasks and results
     let (task_sender, task_receiver) = unbounded::<(String, String)>();
     let (result_sender, result_receiver) = unbounded::<(String, String, Result<()>)>();
 
-    // Spawn worker threads
     let mut handles = Vec::new();
     for _ in 0..jobs {
         let task_receiver = task_receiver.clone();
@@ -138,7 +153,7 @@ fn main() -> Result<()> {
         let config = config.clone();
         let multi_progress = multi_progress.as_ref().map(|mp| mp.clone());
         let handle = thread::spawn(move || {
-            let (resume, timeout, follow_redirects, user_agent, retries, quiet, limit_rate) = &*config;
+            let (resume, timeout, follow_redirects, user_agent, retries, quiet, limit_rate, segments) = &*config;
             while let Ok((url, output_path)) = task_receiver.recv() {
                 let result = download_file(
                     &url,
@@ -151,6 +166,7 @@ fn main() -> Result<()> {
                     *quiet,
                     multi_progress.as_ref(),
                     *limit_rate,
+                    *segments,
                 );
                 let _ = result_sender.send((url, output_path, result));
             }
@@ -158,13 +174,11 @@ fn main() -> Result<()> {
         handles.push(handle);
     }
 
-    // Send tasks to workers
     for task in tasks {
         let _ = task_sender.send(task);
     }
     drop(task_sender);
 
-    // Collect results
     let mut error_count = 0;
     for _ in 0..args.urls.len() {
         let (url, output, result) = result_receiver.recv().unwrap();
@@ -181,16 +195,14 @@ fn main() -> Result<()> {
         }
     }
 
-    // Wait for threads to finish
     for handle in handles {
         let _ = handle.join();
     }
 
-    // If checksum provided and only one URL, verify
     if let Some(expected) = args.sha256 {
         if args.urls.len() == 1 {
             let url = validate_url(&args.urls[0])?;
-            let output_path = if let Some(name) = args.output {
+            let base_name = if let Some(name) = args.output {
                 name
             } else {
                 url.path_segments()
@@ -198,6 +210,11 @@ fn main() -> Result<()> {
                     .filter(|&name| !name.is_empty())
                     .unwrap_or("downloaded")
                     .to_string()
+            };
+            let output_path = if let Some(prefix) = &directory_prefix {
+                Path::new(prefix).join(&base_name).to_string_lossy().to_string()
+            } else {
+                base_name
             };
             if !quiet {
                 eprintln!("🔐 Verifying SHA‑256 checksum...");
@@ -215,7 +232,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Format bytes into human-readable size (e.g., 1.5 MB)
 fn format_size(bytes: usize) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
     let mut size = bytes as f64;

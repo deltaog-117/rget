@@ -12,6 +12,8 @@ pub struct Config {
     pub follow_redirects: Option<bool>,
     pub resume: Option<bool>,
     pub limit_rate: Option<usize>,
+    pub segments: Option<usize>,
+    pub directory_prefix: Option<String>,
 }
 
 impl Config {
@@ -57,30 +59,16 @@ impl Config {
             let default_config = r#"# rget configuration file
 # CLI arguments override these values
 
-# Default timeout in seconds
 timeout = 30
-
-# Default number of retries
 retries = 0
-
-# Default user-agent (uncomment to set)
 # user_agent = "rget/1.0"
-
-# Quiet mode (suppress progress bars)
 quiet = false
-
-# Parallel downloads (number of concurrent jobs)
 jobs = 1
-
-# Follow redirects
 follow_redirects = true
-
-# Resume downloads by default
 resume = false
-
-# Rate limit in bytes per second (e.g., 1048576 = 1 MB/s)
-# You can also use CLI: --limit-rate 1M
-limit_rate = 1048576
+limit_rate = 1048576  # 1 MB/s
+segments = 1          # Number of parallel segments for a single file
+# directory_prefix = "/path/to/downloads"
 "#;
             fs::write(&path, default_config)?;
         }
