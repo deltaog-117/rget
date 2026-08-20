@@ -21,6 +21,7 @@ pub fn download_file(
     multi_progress: Option<&MultiProgress>,
     limit_rate: Option<usize>,
     segments: usize,
+    headers: &[(String, String)],
 ) -> Result<()> {
     if segments > 1 {
         return download_segmented(
@@ -35,6 +36,7 @@ pub fn download_file(
             multi_progress,
             limit_rate,
             segments,
+            headers,
         );
     }
 
@@ -53,6 +55,7 @@ pub fn download_file(
             quiet,
             multi_progress,
             limit_rate,
+            headers,
         );
 
         match result {
@@ -93,6 +96,7 @@ fn attempt_download(
     quiet: bool,
     multi_progress: Option<&MultiProgress>,
     limit_rate: Option<usize>,
+    headers: &[(String, String)],
 ) -> Result<()> {
     let mut client_builder = Client::builder()
         .timeout(std::time::Duration::from_secs(timeout))
@@ -121,6 +125,11 @@ fn attempt_download(
         request_builder = request_builder.header(USER_AGENT, ua);
     } else {
         request_builder = request_builder.header(USER_AGENT, "rget/0.1.0");
+    }
+
+    // Apply custom headers
+    for (key, value) in headers {
+        request_builder = request_builder.header(key, value);
     }
 
     let response = request_builder.send()?;
@@ -212,7 +221,7 @@ fn attempt_download(
 }
 
 // ---------------------------------------------------------------------------
-// Segmented download with improved fallback
+// Segmented download with headers support
 // ---------------------------------------------------------------------------
 
 fn download_segmented(
@@ -227,14 +236,13 @@ fn download_segmented(
     multi_progress: Option<&MultiProgress>,
     limit_rate: Option<usize>,
     segments: usize,
+    headers: &[(String, String)],
 ) -> Result<()> {
-    // Build a client without no_gzip to avoid compatibility issues
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(timeout))
         .redirect(reqwest::redirect::Policy::limited(10))
         .build()?;
 
-    // HEAD request to get Content-Length and check range support
     let head_response = match client.head(url).send() {
         Ok(r) => r,
         Err(e) => {
@@ -253,11 +261,11 @@ fn download_segmented(
                 multi_progress,
                 limit_rate,
                 1,
+                headers,
             );
         }
     };
 
-    // Extract Content-Length directly from headers
     let total_size = head_response
         .headers()
         .get("content-length")
@@ -270,7 +278,6 @@ fn download_segmented(
         eprintln!("🔍 DEBUG: segments = {}", segments);
     }
 
-    // If total_size is 0, fall back to single-thread immediately
     if total_size == 0 {
         if !quiet {
             eprintln!("⚠️  Content-Length header missing or zero; falling back to single-thread.");
@@ -287,10 +294,10 @@ fn download_segmented(
             multi_progress,
             limit_rate,
             1,
+            headers,
         );
     }
 
-    // Check if server supports byte ranges
     let accept_ranges = head_response
         .headers()
         .get(ACCEPT_RANGES)
@@ -314,10 +321,10 @@ fn download_segmented(
             multi_progress,
             limit_rate,
             1,
+            headers,
         );
     }
 
-    // Compute part sizes and ranges
     let part_size = total_size / segments as u64;
     let mut ranges = Vec::with_capacity(segments);
     let mut start = 0;
@@ -357,15 +364,14 @@ fn download_segmented(
             multi_progress,
             limit_rate,
             1,
+            headers,
         );
     }
 
-    // Part file names
     let part_paths: Vec<String> = (0..ranges.len())
         .map(|i| format!("{}.part{}", output_path, i))
         .collect();
 
-    // Resume positions (if resume is enabled)
     let mut resume_positions = vec![0u64; ranges.len()];
     if resume {
         for (i, path) in part_paths.iter().enumerate() {
@@ -383,7 +389,6 @@ fn download_segmented(
         }
     }
 
-    // Shared progress bar (if not quiet)
     let progress_bar = if !quiet {
         let bar = ProgressBar::new(total_size);
         bar.set_style(
@@ -401,7 +406,6 @@ fn download_segmented(
         None
     };
 
-    // Spawn threads
     let mut handles = Vec::with_capacity(ranges.len());
     for i in 0..ranges.len() {
         let url = url.to_string();
@@ -416,6 +420,7 @@ fn download_segmented(
         let quiet = quiet;
         let progress_bar = progress_bar.clone();
         let resume_pos = resume_positions[i];
+        let headers = headers.to_vec();
 
         let handle = thread::spawn(move || -> Result<()> {
             let client = Client::builder()
@@ -439,6 +444,11 @@ fn download_segmented(
                 request_builder = request_builder.header(USER_AGENT, ua);
             } else {
                 request_builder = request_builder.header(USER_AGENT, "rget/0.1.0");
+            }
+
+            // Apply custom headers
+            for (key, value) in &headers {
+                request_builder = request_builder.header(key, value);
             }
 
             let response = request_builder.send()?;
@@ -509,7 +519,6 @@ fn download_segmented(
         handles.push(handle);
     }
 
-    // Collect results
     let mut error_count = 0;
     let mut thread_errors = Vec::new();
     for handle in handles {
@@ -527,7 +536,6 @@ fn download_segmented(
         }
     }
 
-    // If any thread failed with 416, we fall back to single-thread
     if error_count > 0 {
         let all_416 = thread_errors.iter().all(|e| {
             if let RgetError::ProtocolError(msg) = e {
@@ -555,6 +563,7 @@ fn download_segmented(
                 multi_progress,
                 limit_rate,
                 1,
+                headers,
             );
         } else {
             return Err(RgetError::ProtocolError(format!(
@@ -565,7 +574,6 @@ fn download_segmented(
         }
     }
 
-    // Reassemble parts
     let mut output_file = File::create(output_path)?;
     for part_path in part_paths {
         if !std::path::Path::new(&part_path).exists() {

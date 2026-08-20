@@ -16,11 +16,22 @@ use crossbeam_channel::unbounded;
 use std::sync::Arc;
 use std::thread;
 use std::path::Path;
+use std::fs::File;
+use std::io::{BufRead, BufReader, stdin};
+
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
 
+    // --- HANDLE --version ---
+    if args.version {
+        println!("rget version {}", VERSION);
+        std::process::exit(0);
+    }
+
+    // --- HANDLE --init ---
     if args.init {
         match config::Config::write_default_config() {
             Ok(()) => {
@@ -34,24 +45,14 @@ fn main() -> Result<()> {
         }
     }
 
-    if args.urls.is_empty() {
-        eprintln!("Error: At least one URL is required");
-        eprintln!("Usage: rget [OPTIONS] <URL> [URL...]");
-        eprintln!("       rget --init");
-        std::process::exit(1);
-    }
-
-    if args.segments > 1 && args.urls.len() > 1 {
-        eprintln!("Error: --segments can only be used with a single URL");
-        std::process::exit(1);
-    }
-
+    // --- LOAD CONFIG ---
     let config = if !args.no_config {
         config::Config::load()
     } else {
         config::Config::default()
     };
 
+    // --- MERGE CONFIG & CLI ---
     let timeout = args.timeout.unwrap_or_else(|| config.timeout.unwrap_or(30));
     let retries = args.retries.unwrap_or_else(|| config.retries.unwrap_or(0));
     let user_agent = args.user_agent.or_else(|| config.user_agent.clone());
@@ -61,16 +62,78 @@ fn main() -> Result<()> {
     let resume = args.resume || config.resume.unwrap_or(false);
     let limit_rate = args.limit_rate.or_else(|| config.limit_rate);
     let segments = if args.segments > 1 { args.segments } else { config.segments.unwrap_or(1) };
-    let directory_prefix = args.directory_prefix.or_else(|| config.directory_prefix.clone());
 
-    if args.urls.len() > 1 && args.output.is_some() {
+    // Borrow directory_prefix without moving it
+    let directory_prefix = args.directory_prefix.as_ref().or_else(|| config.directory_prefix.as_ref()).cloned();
+
+    // --- PARSE HEADERS ---
+    let custom_headers: Vec<(String, String)> = args
+        .header
+        .iter()
+        .filter_map(|h| {
+            let parts: Vec<&str> = h.splitn(2, ':').collect();
+            if parts.len() == 2 {
+                Some((parts[0].trim().to_string(), parts[1].trim().to_string()))
+            } else {
+                eprintln!("⚠️  Ignoring malformed header: {}", h);
+                None
+            }
+        })
+        .collect();
+
+    // --- COLLECT URLS FROM INPUT FILE OR ARGS ---
+    let urls: Vec<String> = if let Some(input_file) = &args.input_file {
+        if input_file == "-" {
+            // Read from stdin
+            let stdin = stdin();
+            let reader = stdin.lock();
+            reader
+                .lines()
+                .filter_map(|line| line.ok())
+                .filter(|line| !line.trim().is_empty())
+                .collect()
+        } else {
+            // Read from file
+            let file = File::open(input_file)
+                .unwrap_or_else(|e| {
+                    eprintln!("❌ Failed to open input file '{}': {}", input_file, e);
+                    std::process::exit(1);
+                });
+            let reader = BufReader::new(file);
+            reader
+                .lines()
+                .filter_map(|line| line.ok())
+                .filter(|line| !line.trim().is_empty())
+                .collect()
+        }
+    } else {
+        args.urls.clone()
+    };
+
+    if urls.is_empty() {
+        eprintln!("Error: No URLs provided");
+        eprintln!("Usage: rget [OPTIONS] <URL> [URL...]");
+        eprintln!("       rget -i urls.txt");
+        eprintln!("       rget --init");
+        eprintln!("       rget --version");
+        std::process::exit(1);
+    }
+
+    if segments > 1 && urls.len() > 1 {
+        eprintln!("Error: --segments can only be used with a single URL");
+        std::process::exit(1);
+    }
+
+    if urls.len() > 1 && args.output.is_some() {
         eprintln!("Error: -O can only be used with a single URL");
         std::process::exit(1);
     }
 
+    // --- BUILD TASKS ---
     let mut tasks: Vec<(String, String)> = Vec::new();
-    for url_str in &args.urls {
+    for url_str in &urls {
         let url = validate_url(url_str)?;
+        // Borrow output without moving it
         let base_name = if let Some(name) = &args.output {
             name.clone()
         } else {
@@ -87,13 +150,27 @@ fn main() -> Result<()> {
                 std::fs::create_dir_all(dir)?;
             }
             dir.join(&base_name).to_string_lossy().to_string()
-        } else {
+        } else if args.output.is_some() || directory_prefix.is_some() {
+            // If -O or -P was explicitly given, use that (already handled above)
             base_name
+        } else {
+            // Default Downloads folder
+            if let Some(download_dir) = dirs::download_dir() {
+                let dir = download_dir;
+                if !dir.exists() {
+                    std::fs::create_dir_all(&dir)?;
+                }
+                dir.join(&base_name).to_string_lossy().to_string()
+            } else {
+                // Fallback to current directory
+                base_name
+            }
         };
 
         tasks.push((url_str.clone(), output_path));
     }
 
+    // --- VERBOSE OUTPUT ---
     if !quiet && args.verbose > 0 {
         eprintln!("🔍 Downloading {} URL(s)", tasks.len());
         eprintln!("⏱️  Timeout: {}s", timeout);
@@ -120,13 +197,21 @@ fn main() -> Result<()> {
         }
         if let Some(prefix) = &directory_prefix {
             eprintln!("📂 Output directory: {}", prefix);
+        } else if args.output.is_none() && directory_prefix.is_none() {
+            if let Some(download_dir) = dirs::download_dir() {
+                eprintln!("📂 Default output directory: {}", download_dir.display());
+            }
+        }
+        if !custom_headers.is_empty() {
+            eprintln!("📋 Custom headers: {:?}", custom_headers);
         }
         if !args.no_config {
             eprintln!("⚙️  Config: ~/.config/rget/config.toml");
         }
     }
 
-    let config = Arc::new((
+    // --- SHARED CONFIG ---
+    let shared_config = Arc::new((
         resume,
         timeout,
         follow_redirects,
@@ -135,6 +220,7 @@ fn main() -> Result<()> {
         quiet,
         limit_rate,
         segments,
+        custom_headers,
     ));
 
     let multi_progress = if jobs > 1 {
@@ -150,10 +236,10 @@ fn main() -> Result<()> {
     for _ in 0..jobs {
         let task_receiver = task_receiver.clone();
         let result_sender = result_sender.clone();
-        let config = config.clone();
+        let config = shared_config.clone();
         let multi_progress = multi_progress.as_ref().map(|mp| mp.clone());
         let handle = thread::spawn(move || {
-            let (resume, timeout, follow_redirects, user_agent, retries, quiet, limit_rate, segments) = &*config;
+            let (resume, timeout, follow_redirects, user_agent, retries, quiet, limit_rate, segments, headers) = &*config;
             while let Ok((url, output_path)) = task_receiver.recv() {
                 let result = download_file(
                     &url,
@@ -167,6 +253,7 @@ fn main() -> Result<()> {
                     multi_progress.as_ref(),
                     *limit_rate,
                     *segments,
+                    headers,
                 );
                 let _ = result_sender.send((url, output_path, result));
             }
@@ -180,7 +267,7 @@ fn main() -> Result<()> {
     drop(task_sender);
 
     let mut error_count = 0;
-    for _ in 0..args.urls.len() {
+    for _ in 0..urls.len() {
         let (url, output, result) = result_receiver.recv().unwrap();
         match result {
             Ok(()) => {
@@ -199,11 +286,12 @@ fn main() -> Result<()> {
         let _ = handle.join();
     }
 
+    // --- CHECKSUM VERIFICATION (single URL only) ---
     if let Some(expected) = args.sha256 {
-        if args.urls.len() == 1 {
-            let url = validate_url(&args.urls[0])?;
-            let base_name = if let Some(name) = args.output {
-                name
+        if urls.len() == 1 {
+            let url = validate_url(&urls[0])?;
+            let base_name = if let Some(name) = &args.output {
+                name.clone()
             } else {
                 url.path_segments()
                     .and_then(|segments| segments.last())
@@ -213,6 +301,10 @@ fn main() -> Result<()> {
             };
             let output_path = if let Some(prefix) = &directory_prefix {
                 Path::new(prefix).join(&base_name).to_string_lossy().to_string()
+            } else if args.output.is_some() || directory_prefix.is_some() {
+                base_name
+            } else if let Some(download_dir) = dirs::download_dir() {
+                download_dir.join(&base_name).to_string_lossy().to_string()
             } else {
                 base_name
             };

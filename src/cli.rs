@@ -2,8 +2,6 @@ use clap::Parser;
 
 /// Parse human-readable size strings like "500k", "2M", "1G" (or "0" for no limit)
 fn parse_size(s: &str) -> Result<usize, String> {
-    // ... existing parse_size implementation ...
-    // (I'll include it for completeness)
     let s = s.trim();
     if s == "0" {
         return Ok(0);
@@ -109,6 +107,14 @@ pub struct Args {
     #[arg(long, default_value = "1")]
     pub segments: usize,
 
+    /// Custom HTTP headers (can be used multiple times: -H "Key: Value")
+    #[arg(short = 'H', long)]
+    pub header: Vec<String>,
+
+    /// Read URLs from a file (use - for stdin)
+    #[arg(short = 'i', long)]
+    pub input_file: Option<String>,
+
     /// Ignore config file
     #[arg(long)]
     pub no_config: bool,
@@ -116,4 +122,8 @@ pub struct Args {
     /// Generate a default configuration file and exit
     #[arg(long)]
     pub init: bool,
+
+    /// Display version information and exit
+    #[arg(long)]
+    pub version: bool,
 }
