@@ -6,7 +6,12 @@
 <div class="container mx-auto px-4 py-8">
     <div class="flex justify-between items-start mb-6">
         <div>
-            <h1 class="text-4xl font-bold">{{ $page->title }}</h1>
+            <div class="flex items-center gap-3">
+                <h1 class="text-4xl font-bold">{{ $page->title }}</h1>
+                @if($page->wasUpdatedSinceLastVisit(auth()->user()))
+                    <span class="bg-green-100 text-green-800 text-sm font-medium px-3 py-1 rounded">Updated since your last visit</span>
+                @endif
+            </div>
             <p class="text-gray-500 text-sm">Slug: {{ $page->slug }}</p>
             @if($page->author)
                 <p class="text-gray-500 text-sm">Author: {{ $page->author }}</p>
@@ -24,4 +29,4 @@
         {!! \Illuminate\Support\Str::markdown($page->content) !!}
     </div>
 </div>
-@endsections
+@endsection

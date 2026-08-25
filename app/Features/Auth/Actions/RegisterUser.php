@@ -15,6 +15,7 @@ class RegisterUser
             'name' => $name,
             'email' => $email,
             'password' => Hash::make($password),
+            'last_visited_at' => now(),
         ]);
 
         return $user;

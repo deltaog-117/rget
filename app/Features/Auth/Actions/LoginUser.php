@@ -20,6 +20,9 @@ class LoginUser
 
         /** @var User $user */
         $user = Auth::user();
+        $user->last_visited_at = now();
+        $user->save();
+
         return $user;
     }
 }

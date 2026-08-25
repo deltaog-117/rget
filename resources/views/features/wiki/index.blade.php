@@ -18,7 +18,12 @@
             @foreach($pages as $page)
                 <li class="border rounded p-4 shadow hover:shadow-lg transition">
                     <a href="{{ route('wiki.show', $page->slug) }}" class="block">
-                        <h2 class="text-xl font-semibold text-blue-600 hover:underline">{{ $page->title }}</h2>
+                        <div class="flex items-start justify-between">
+                            <h2 class="text-xl font-semibold text-blue-600 hover:underline">{{ $page->title }}</h2>
+                            @if($page->wasUpdatedSinceLastVisit(auth()->user()))
+                                <span class="bg-green-100 text-green-800 text-xs font-medium px-2 py-0.5 rounded">New</span>
+                            @endif
+                        </div>
                         <p class="text-sm text-gray-500 mt-1">Slug: {{ $page->slug }}</p>
                         <p class="text-sm text-gray-500">Updated: {{ $page->updated_at->diffForHumans() }}</p>
                     </a>

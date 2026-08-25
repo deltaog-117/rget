@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Features\Wiki\Models;
 
+use App\Features\Auth\Models\User;
 use App\Features\Wiki\ValueObjects\Content;
 use App\Features\Wiki\ValueObjects\Slug;
 use App\Features\Wiki\ValueObjects\Title;
@@ -63,5 +64,13 @@ class Page extends Model
     public function getMarkdownFilePath(): string
     {
         return 'pages/' . $this->toMarkdownFileName();
+    }
+
+    public function wasUpdatedSinceLastVisit(?User $user): bool
+    {
+        if (!$user || !$user->last_visited_at) {
+            return false;
+        }
+        return $this->updated_at->gt($user->last_visited_at);
     }
 }
