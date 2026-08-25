@@ -1,11 +1,13 @@
 <div class="max-w-md mx-auto bg-white p-6 rounded shadow">
-    <h2 class="text-2xl font-bold mb-6 text-center">Login</h2>
+    <h2 class="text-2xl font-bold mb-6 text-center">Register</h2>
 
-    @if(session()->has('error'))
-        <div class="bg-red-100 text-red-700 p-3 rounded mb-4">{{ session('error') }}</div>
-    @endif
+    <form wire:submit.prevent="register">
+        <div class="mb-4">
+            <label class="block text-gray-700 text-sm font-bold mb-2">Name</label>
+            <input wire:model="name" type="text" class="w-full border rounded px-3 py-2" required>
+            @error('name') <p class="text-red-500 text-xs mt-1">{{ $message }}</p> @enderror
+        </div>
 
-    <form wire:submit.prevent="login">
         <div class="mb-4">
             <label class="block text-gray-700 text-sm font-bold mb-2">Email</label>
             <input wire:model="email" type="email" class="w-full border rounded px-3 py-2" required>
@@ -19,17 +21,16 @@
         </div>
 
         <div class="mb-4">
-            <label>
-                <input wire:model="remember" type="checkbox"> Remember me
-            </label>
+            <label class="block text-gray-700 text-sm font-bold mb-2">Confirm Password</label>
+            <input wire:model="password_confirmation" type="password" class="w-full border rounded px-3 py-2" required>
         </div>
 
         <button type="submit" class="w-full bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
-            Login
+            Register
         </button>
     </form>
 
     <p class="mt-4 text-center text-sm text-gray-600">
-        Don't have an account? <a href="{{ route('auth.register') }}" class="text-blue-500 hover:underline">Register</a>
+        Already have an account? <a href="{{ route('auth.login') }}" class="text-blue-500 hover:underline">Login</a>
     </p>
 </div>

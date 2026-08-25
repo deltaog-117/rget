@@ -61,6 +61,10 @@
         .mb-2 { margin-bottom: 0.5rem; }
         .mb-4 { margin-bottom: 1rem; }
         .shadow-appearance { box-shadow: 0 1px 3px 0 rgba(0,0,0,0.1), 0 1px 2px 0 rgba(0,0,0,0.06); }
+        .max-w-md { max-width: 28rem; }
+        .mx-auto { margin-left: auto; margin-right: auto; }
+        .text-center { text-align: center; }
+        .text-2xl { font-size: 1.5rem; }
         @media (min-width: 640px) { .sm\:flex { display: flex; } }
         @media (min-width: 768px) { .md\:grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
         @media (min-width: 1024px) { .lg\:grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
@@ -74,8 +78,19 @@
                 <a href="{{ route('wiki.index') }}" class="text-gray-700 hover:text-gray-900">Wiki</a>
                 <a href="{{ route('wiki.create') }}" class="text-gray-700 hover:text-gray-900">New Page</a>
                 <a href="{{ route('distro-comparison.index') }}" class="text-gray-700 hover:text-gray-900">Distros</a>
+                <a href="{{ route('family-tree.index') }}" class="text-gray-700 hover:text-gray-900">Family Tree</a>
             </div>
             <div class="flex items-center space-x-4">
+                @auth
+                    <span class="text-sm text-gray-600">{{ auth()->user()->name }}</span>
+                    <form action="{{ route('auth.logout') }}" method="POST" class="inline">
+                        @csrf
+                        <button type="submit" class="text-gray-700 hover:text-gray-900">Logout</button>
+                    </form>
+                @else
+                    <a href="{{ route('auth.login') }}" class="text-gray-700 hover:text-gray-900">Login</a>
+                    <a href="{{ route('auth.register') }}" class="text-gray-700 hover:text-gray-900">Register</a>
+                @endauth
                 <livewire:search-bar />
             </div>
         </div>
