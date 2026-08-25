@@ -180,6 +180,7 @@ return [
         App\Features\Search\Providers\SearchServiceProvider::class,
         App\Features\FamilyTree\Providers\FamilyTreeServiceProvider::class,
         App\Features\Auth\Providers\AuthServiceProvider::class,
+        App\Features\Terminal\Providers\TerminalServiceProvider::class,
     ],
 
     /*

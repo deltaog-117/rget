@@ -79,6 +79,7 @@
                 <a href="{{ route('wiki.create') }}" class="text-gray-700 hover:text-gray-900">New Page</a>
                 <a href="{{ route('distro-comparison.index') }}" class="text-gray-700 hover:text-gray-900">Distros</a>
                 <a href="{{ route('family-tree.index') }}" class="text-gray-700 hover:text-gray-900">Family Tree</a>
+                <a href="{{ route('terminal.index') }}" class="text-gray-700 hover:text-gray-900">Terminal</a>
             </div>
             <div class="flex items-center space-x-4">
                 @auth
