@@ -7,7 +7,6 @@
     <title>@yield('title', 'Tuxpedia')</title>
     @livewireStyles
     <style>
-        /* Basic reset & utility classes */
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: system-ui, -apple-system, sans-serif; background: #f7fafc; }
         nav { background: #ffffff; border-bottom: 1px solid #e2e8f0; padding: 0.75rem 1.5rem; }
@@ -70,10 +69,14 @@
 <body>
     <nav>
         <div class="container flex justify-between items-center">
-            <a href="{{ route('wiki.index') }}" class="text-xl font-bold text-gray-800">Tuxpedia</a>
-            <div class="flex space-x-4">
+            <div class="flex items-center space-x-4">
+                <a href="{{ route('wiki.index') }}" class="text-xl font-bold text-gray-800">Tuxpedia</a>
                 <a href="{{ route('wiki.index') }}" class="text-gray-700 hover:text-gray-900">Wiki</a>
                 <a href="{{ route('wiki.create') }}" class="text-gray-700 hover:text-gray-900">New Page</a>
+                <a href="{{ route('distro-comparison.index') }}" class="text-gray-700 hover:text-gray-900">Distros</a>
+            </div>
+            <div class="flex items-center space-x-4">
+                <livewire:search-bar />
             </div>
         </div>
     </nav>

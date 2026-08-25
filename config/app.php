@@ -171,13 +171,14 @@ return [
          * Application Service Providers...
          */
         App\Providers\AppServiceProvider::class,
-        // App\Providers\RouteServiceProvider::class, // Not needed in Laravel 11+
 
         /*
          * Feature Service Providers
          */
         App\Features\Wiki\Providers\WikiServiceProvider::class,
         App\Features\DistroComparison\Providers\DistroComparisonServiceProvider::class,
+        App\Features\Search\Providers\SearchServiceProvider::class,
+        App\Features\FamilyTree\Providers\FamilyTreeServiceProvider::class,
     ],
 
     /*
