@@ -177,6 +177,7 @@ return [
          * Feature Service Providers
          */
         App\Features\Wiki\Providers\WikiServiceProvider::class,
+        App\Features\DistroComparison\Providers\DistroComparisonServiceProvider::class,
     ],
 
     /*
