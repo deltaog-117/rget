@@ -1,9 +1,50 @@
-@import 'tailwindcss';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
-@source '../../storage/framework/views/*.php';
+@layer base {
+    body {
+        @apply bg-tux-bg text-tux-text font-sans antialiased;
+    }
+    h1, h2, h3, h4, h5, h6 {
+        @apply font-bold tracking-tight;
+    }
+    a {
+        @apply text-tux-blue hover:underline;
+    }
+    code {
+        @apply font-mono text-sm bg-gray-100 px-1.5 py-0.5 rounded;
+    }
+    #terminal-container {
+        background-color: #1e1e1e !important;
+        color: #d4d4d4 !important;
+    }
+    #terminal-container .xterm {
+        background-color: #1e1e1e !important;
+        color: #d4d4d4 !important;
+    }
+}
 
-@theme {
-    --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
-        'Segoe UI Symbol', 'Noto Color Emoji';
+@layer components {
+    .card {
+        @apply bg-tux-surface border border-tux-border rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200;
+    }
+    .btn-primary {
+        @apply bg-tux-green text-white font-semibold py-2 px-4 rounded hover:bg-green-600 transition-colors;
+    }
+    .btn-secondary {
+        @apply bg-tux-blue text-white font-semibold py-2 px-4 rounded hover:bg-blue-700 transition-colors;
+    }
+    .btn-danger {
+        @apply bg-red-600 text-white font-semibold py-2 px-4 rounded hover:bg-red-700 transition-colors;
+    }
+    .badge-new {
+        @apply bg-green-100 text-green-800 text-xs font-medium px-2 py-0.5 rounded-full;
+    }
+    .badge-updated {
+        @apply bg-orange-100 text-orange-800 text-xs font-medium px-2 py-0.5 rounded-full;
+    }
+    .input-field {
+        @apply w-full border border-tux-border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-tux-blue focus:border-transparent;
+    }
 }
