@@ -1,58 +1,210 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# 🐧 Tuxpedia
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![PHP 8.4+](https://img.shields.io/badge/PHP-8.4+-blue.svg)](https://php.net)
+[![Laravel 13](https://img.shields.io/badge/Laravel-13-red.svg)](https://laravel.com)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
 
-## About Laravel
+**The Linux Encyclopedia – with a live terminal simulator.**
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+---
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## 💡 About
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+Since I first used Linux, I loved it. I love reading encyclopedias too. I wished there was a single place where I could look up distributions, compare their package managers, and actually try out commands – all without leaving the browser. Tuxpedia is the result of this.
 
-## Learning Laravel
+It's a full‑stack web application that combines wiki‑style content management, distribution comparison, interactive family trees, and a fully functional terminal simulator. Whether you're a beginner exploring Linux or a seasoned admin looking for a quick reference, Tuxpedia gives you a clean, modern interface to learn and experiment.
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+---
 
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+## 📸 Screenshots
 
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
+Main page screen:
+![Screenshot  of Tuxpedia's main page screen.](./screenshots/tuxpedia-main-page-screenshot.png)
 
-## Agentic Development
+Register page screen:
+![Screenshot  of Tuxpedia's register page screen.](./screenshots/tuxpedia-register-page.png)
 
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+Create page screen:
+![Screenshot of Tuxpedia's create page screen.](./screenshots/tuxpedia-create-page-screenshot.png)
+
+Article example screen:
+![Screenshot  of Tuxpedia's created article screen.](./screenshots/tuxpedia-nixos-screenshot1.png)
+
+Article example screen 2:
+![Screenshot  of Tuxpedia's created article screen 2.](./screenshots/tuxpedia-nixos-screenshot2.png)
+
+Article example screen 3:
+![Screenshot  of Tuxpedia's created article screen 3.](./screenshots/tuxpedia-artix-screenshot.png)
+
+Terminal simulator screen:
+![Screenshot of Tuxpedia's terminal simulator.](./screenshots/tuxpedia-terminal-simulator-page.png)
+
+---
+
+## ✨ Features
+
+- 📝 **Wiki** – Full CRUD with Markdown editing and Git versioning (every change is committed to a local Git repo)
+- 📊 **Distro Comparison** – Sortable, filterable, searchable table of Linux distributions (seeded with real data)
+- 🔍 **Full‑text Search** – MySQL FULLTEXT search with relevance ranking for wiki pages
+- 🌳 **Family Tree** – Interactive D3.js tree visualization showing distribution lineages
+- 🔐 **User Authentication** – Login, Register, Logout with Livewire and custom User model
+- 🆕 **"Changed Since Last Visit"** – Green badge on pages updated after your last visit
+- 🖥️ **Terminal Simulator** – Fully functional Linux terminal in the browser (xterm.js + virtual filesystem)
+
+---
+
+## 📋 Requirements
+
+- PHP 8.4+
+- Composer
+- MySQL or MariaDB (or SQLite for development)
+- Node.js & NPM (for asset compilation)
+
+---
+
+## 📦 Installation
 
 ```bash
-composer require laravel/boost --dev
+# Clone the repository
+git clone https://github.com/[username]/tuxpedia.git
+cd tuxpedia
 
-php artisan boost:install
+# Install PHP dependencies
+composer install
+
+# Install Node dependencies
+npm install
+
+# Compile CSS with Tailwind CLI
+npm run css:build
+
+# Copy environment file and generate key
+cp .env.example .env
+php artisan key:generate
+
+# Configure your database in .env, then run migrations
+php artisan migrate
+
+# Seed distributions table
+php artisan db:seed --class=App\\Features\\DistroComparison\\Database\\Seeders\\DistributionSeeder
+
+# Start the development server
+php artisan serve
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+---
 
-## Contributing
+## 🚀 Usage
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+Visit `http://localhost:8000` in your browser.
 
-## Code of Conduct
+- **Wiki** – Browse pages, create new ones with Markdown, and see the "New" badge on recent updates.
+- **Distro Comparison** – Search, filter, and sort distributions by various attributes.
+- **Family Tree** – Explore the interactive lineage graph.
+- **Terminal** – Type Linux commands like `ls`, `pwd`, `echo`, `cat /etc/os-release`, and more.
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+**Test credentials:**
+- Email: `test@example.com`
+- Password: `password123`
 
-## Security Vulnerabilities
+---
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+## ⚙️ Configuration
 
-## License
+Environment variables are managed via `.env`. Key ones:
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+| Variable | Purpose |
+|----------|---------|
+| `DB_CONNECTION` | Database driver (`mysql`, `sqlite`) |
+| `DB_DATABASE` | Database name |
+| `APP_DEBUG` | Enable/disable debug mode |
+
+---
+
+## 📁 Project Structure
+
+```
+app/Features/          # Business capabilities (vertical slices)
+├── Auth/              # User authentication (Login, Register, Logout)
+├── DistroComparison/  # Sortable/filterable distribution table
+├── FamilyTree/        # D3.js interactive lineage tree
+├── Search/            # Full‑text search with relevance ranking
+├── Terminal/          # Browser‑based terminal simulator
+└── Wiki/              # Wiki CRUD with Markdown and Git versioning
+
+app/Shared/            # Read‑only infrastructure (Database, Logging, Utils)
+resources/views/features/  # Blade views per feature
+public/js/terminal-simulator.js  # Virtual filesystem and command parser
+```
+
+**The Golden Rule:** Each feature folder can be deleted without breaking the rest of the application – no circular dependencies.
+
+---
+
+## 🛠️ Built With
+
+- **Backend:** [Laravel 13](https://laravel.com) (PHP 8.4)
+- **Frontend:** [Livewire](https://livewire.laravel.com) + [Alpine.js](https://alpinejs.dev) with Blade templates
+- **CSS:** [Tailwind CSS](https://tailwindcss.com) (light theme, dark terminal)
+- **Terminal:** [xterm.js](https://xtermjs.org) + custom virtual filesystem
+- **Visualization:** [D3.js](https://d3js.org)
+- **Version Control:** Git for wiki page history
+- **Database:** MySQL with FULLTEXT indexes
+
+---
+
+## 🧪 Testing
+
+```bash
+# Run all tests (unit + integration)
+php artisan test
+
+# Run unit tests only
+php artisan test --testsuite=Unit
+
+# Run integration tests only
+php artisan test --testsuite=Integration
+```
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Please follow these steps:
+
+1. Fork the repository.
+2. Create a feature branch (`git checkout -b feature/amazing`).
+3. Commit your changes (`git commit -m 'Add amazing feature'`).
+4. Push to the branch (`git push origin feature/amazing`).
+5. Open a Pull Request.
+
+Read the [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+
+---
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE) – see the [LICENSE](LICENSE) file for details.
+
+---
+
+## 🙏 Acknowledgements
+
+- [Laravel](https://laravel.com) – the framework that makes PHP development a joy.
+- [Livewire](https://livewire.laravel.com) – for building dynamic interfaces without writing JavaScript.
+- [xterm.js](https://xtermjs.org) – for the authentic terminal experience.
+- [D3.js](https://d3js.org) – for the interactive tree visualizations.
+- The open‑source community for their incredible tools and inspiration.
+
+---
+
+## 💬 Questions / Support
+
+Open an [issue](https://github.com/[username]/tuxpedia/issues) or reach out via [[email/chat]].
+
+---
+
+## 📜 Changelog
+
+See the [CHANGELOG.md](CHANGELOG.md) file for version history.
