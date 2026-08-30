@@ -1,0 +1,23 @@
+# rget configuration file
+# CLI arguments override these values
+
+# Default timeout in seconds
+timeout = 30
+
+# Default number of retries
+retries = 0
+
+# Default user-agent
+# user_agent = "rget/1.0"
+
+# Quiet mode (suppress progress bars)
+quiet = false
+
+# Parallel downloads
+jobs = 1
+
+# Follow redirects
+follow_redirects = true
+
+# Resume downloads by default
+resume = false
