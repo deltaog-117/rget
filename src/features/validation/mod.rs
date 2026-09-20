@@ -26,13 +26,17 @@ pub use error::{Error, Result};
 
 use url::Url;
 
+/// Checks that `url_str` is a URL rget is willing to fetch and returns it parsed.
+///
+/// The URL must parse, use `http` or `https`, pass the content checks (a plausible hostname,
+/// no path traversal, no well-known secret file) and not point at a local or private host.
+///
+/// # Errors
+///
+/// [`Error::InvalidUrl`] for a malformed or unsafe URL, [`Error::BlockedUrl`] for a local or
+/// private host.
 pub fn validate_url(url_str: &str) -> Result<Url> {
-    // --- 1. CUSTOM SANITIZATION ---
-    let clean_url_str = sanitize::sanitize_url(url_str)?;
-
-    // --- 2. STANDARD URL VALIDATION ---
-    let url = Url::parse(&clean_url_str)
-        .map_err(|_| Error::InvalidUrl(clean_url_str.clone()))?;
+    let url = Url::parse(url_str).map_err(|_| Error::InvalidUrl(url_str.to_string()))?;
 
     // Only allow HTTP/HTTPS
     let scheme = url.scheme();
@@ -43,7 +47,7 @@ pub fn validate_url(url_str: &str) -> Result<Url> {
         )));
     }
 
-    // --- 3. HOST CHECKS ---
+    sanitize::check(url_str, &url)?;
     host::ensure_public(&url)?;
 
     Ok(url)

@@ -15,7 +15,7 @@ Every time I needed to download a file from the terminal, I found myself torn be
 
 I wanted a tool that combined the **best of both** — `curl`'s flexibility with `wget`'s simplicity — while being **secure by default**. So I built **rget**: a modern, safe downloader that:
 
-- Blocks command injection and path traversal attacks
+- Refuses path-traversal URLs, well-known secret-file paths and malformed hostnames
 - Saves files to your `~/Downloads` folder by default (no clutter!)
 - Supports segmented downloads for maximum speed
 - Uses Rust's memory safety guarantees
@@ -27,7 +27,7 @@ Whether you're a developer downloading dependencies, a sysadmin fetching logs, o
 
 ## ✨ Features
 
-- 🔒 **Military‑grade sanitization** — Blocks command injection, path traversal, and sensitive file access
+- 🔒 **URL safety checks** — Only `http`/`https`; refuses path traversal (`..` in any encoding), well-known secret files (`.env`, `.ssh/id_rsa`, `/etc/passwd`, …) and malformed hostnames. Ordinary URLs with `&`, `;`, `(`, `)` or `$` are fine
 - 🚀 **Segmented downloads** (`--segments`) — Split files into parts and download in parallel for maximum speed
 - 📦 **Parallel downloads** (`-j`) — Download multiple URLs concurrently
 - 🔄 **Automatic retries** (`-r`) — Exponential backoff with jitter for transient failures (timeouts, connection errors, 408/425/429/5xx); honours the server's `Retry-After`
@@ -84,6 +84,11 @@ sudo mv rget /usr/local/bin/
 rget https://example.com/file.zip
 ```
 **File saves to:** `~/Downloads/file.zip`
+
+> **Quote URLs that contain `&`, `;`, `(`, `)` or `$`.** Your shell interprets them before rget ever runs (an unquoted `&` sends the command to the background and cuts the URL short):
+> ```bash
+> rget 'https://example.com/download?id=42&format=zip'
+> ```
 
 ### Custom output name
 ```bash
@@ -232,7 +237,7 @@ rget is built with security as a priority:
 
 - **No command injection** — Pure Rust, no shell execution
 - **Memory‑safe** — No `unsafe` code
-- **Input sanitization** — Blocks dangerous characters, path traversal, and sensitive file access
+- **URL checks** — Only `http`/`https`; refuses path traversal, well-known secret-file paths and hostnames no DNS name can contain. The checks look at what a URL *means* once parsed, so legitimate URLs (`?a=1&b=2`, `file(1).zip`) are never refused
 - **TLS hardening** — Uses `rustls` with modern cipher suites
 - **Private IP blocking** — Prevents SSRF attacks
 

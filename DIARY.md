@@ -19,6 +19,7 @@
 | 2026-09-20 | Partial downloads and resume validation | `name.part` + `.part.meta` sidecar, `If-Range` | ✅ Confirmed |
 | 2026-09-20 | Retry policy | Classify errors; honour `Retry-After` (cap 60s) | ✅ Confirmed |
 | 2026-09-20 | Segmented parts, validation and merge | Keep part files, sidecar layout check, `io::copy` merge | ✅ Confirmed |
+| 2026-09-20 | URL validation | Judge the parsed URL: hostname, `..` segments, secret-file segments | ✅ Confirmed |
 
 ---
 
@@ -728,6 +729,97 @@ Before choosing, the two merges were measured on 4 parts of 128 MiB (tmpfs): rea
 
 - `$SUITE/2engineering.md` (pillars 1, 2 and 4), `$SUITE/4iteration.md`
 - `ROADMAP.md`, items B8, B9, B11
+
+---
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-09-20 | Initial entry | deltaog-117 |
+
+---
+
+### URL Validation: Judge What the URL Means
+
+**Date:** 2026-09-20
+**Status:** Confirmed
+
+---
+
+#### Context / Background
+
+The validator refused any URL whose *text* contained `; | & $ ( ) < > ` ``, refused a decoded `; | &`, refused `../` anywhere, and matched ten "sensitive" regular expressions as substrings of the whole URL. In practice that rejected ordinary URLs: anything with a query string like `?a=1&b=2`, `file(1).zip`, `Rust_(programming_language)`, `;jsessionid=…`, an encoded `%26`, hosts such as `foo.environment.com`, and query text such as `?next=../home`. It was also weaker than it looked: `%2e%2e` and `%2eenv` passed straight through.
+
+This is a security feature that the README advertises, so the decision started from the threat model instead of from the false positives.
+
+**What was established before choosing** (a throwaway probe against the `url` crate, plus a search of the code):
+- rget never spawns a process, so URL text never reaches a shell. The "command injection" character list could only matter if a shell had already seen the URL, and by then rget has not run yet (which is why URLs with `&` must be quoted).
+- `& ; $ ( ) |` are legal sub-delimiters in a path or query. The parser keeps them, percent-encodes `< > `` ` and space, strips CR and LF, and resolves `..` segments in every spelling (`../`, `%2e%2e`, `.%2E`, `\..\`).
+- The parser does *not* handle two things: it accepts hosts such as `exa;mple.com`, `exa&mple.com` and `exa$mple.com`, and it leaves `%2eenv` and `..%2f` encoded.
+
+---
+
+#### Options Considered
+
+**Option A: Structural checks on the parsed URL**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Fixes every false positive <br> • Keeps the protections the README advertises <br> • Catches encoded spellings the old code missed <br> • Removes the `regex` dependency |
+| **Disadvantages** | • What counts as "sensitive" is a judgement call <br> • More logic than the alternatives |
+| **Implementation Difficulty** | Medium |
+| **Fit with Constraints** | Best |
+
+**Option B: Keep every check, but only on the path, and match `.env` as a segment**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Smallest diff |
+| **Disadvantages** | • Still refuses `file(1).zip`, `_(disambiguation)`, `;jsessionid=` and `%26` in paths <br> • Fixes two of the three known defects |
+| **Implementation Difficulty** | Easy |
+| **Fit with Constraints** | Not enough |
+
+**Option C: Scheme and host checks only**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • No false positives <br> • Honest about the threat model: asking a *remote* server for `/etc/passwd` cannot hurt the local machine, and the real risks are SSRF (host checks) and writing a bad local file name |
+| **Disadvantages** | • Removes protections the README advertises |
+| **Implementation Difficulty** | Easy |
+| **Fit with Constraints** | Defensible, but a bigger product change |
+
+---
+
+#### Decision & Rationale
+
+**Chosen Option:** A, with the sensitive-file list kept as policy.
+
+**Rules implemented** (`sanitize.rs`, pure functions on `&str` and `&Url`):
+- **Scheme:** `http` and `https` only (unchanged).
+- **Host:** letters, digits, `.`, `-` and `_` (an internationalised name is already ASCII). IP literals are not checked here.
+- **Traversal:** judged on the *raw* text, because the parsed path has already been resolved. The raw path is what follows the authority, cut at the first `?` or `#`. Each segment is percent-decoded and split again on `/` and `\`, so `%2e%2e`, `.%2E`, `..%2f` and `..%5c` all count; a segment must equal `..` exactly, so `a..b`, `dir../x` and `...` do not. The query and fragment are never examined. The error message is unchanged.
+- **Secret files:** the parsed path is decoded, lower-cased and flattened into pieces. A piece equal to `.env`, `.bashrc` or `.zshrc`, or two consecutive pieces equal to `etc/passwd`, `etc/shadow`, `etc/sudoers`, `.git/config`, `.aws/credentials`, `.ssh/id_rsa` or `.ssh/authorized_keys`, is refused. Host, query and fragment are never examined, and matching is exact, so `.env.example`, `environment` and `etc/passwd.bak` pass.
+- **Everything else legal in a URL is allowed.**
+
+**Things caught along the way:**
+- My first `raw_path` searched for the first slash *before* cutting at `?`, so for `http://example.com?x=/../` the query text was mistaken for a path and the false positive I was removing came straight back. A unit test caught it.
+- One mutation survived: checking traversal on the whole URL instead of only the path. My example used `?next=../home`, where the segment is `x?next=..` and never equals `..` even on the whole string. The distinguishing case has a slash first (`?next=/../home`); it is now an example test and part of a property test, and the mutation is caught.
+- The end-to-end comparison showed the old validator waving `http://example.com/a/%2e%2e/b` and `http://example.com/%2eenv` through to the server. Both are now refused.
+
+**Verification:** 187 tests pass. Mutating each rule (checking the whole URL, skipping the percent-decoding, matching secret names anywhere in the text, skipping the host check) makes a specific test fail. The properties were also run with 10,000 cases each. The 99-case end-to-end comparison against the previous build changed exactly the 12 intended cases; every other case was identical once file listings were ignored. The four validator cases that used `example.com` now hit the local server, so the harness no longer depends on the internet.
+
+**Trade-offs accepted:**
+- The secret-file list is a policy choice, kept as it was. It still refuses `.bashrc` from a dotfiles repository. An opt-out flag next to C2's `--allow-private` is on the roadmap (D11).
+- Percent-decoding is applied once. A double-encoded `%252e%252e` is not treated as traversal, because nothing in a client decodes it twice.
+- **A consequence to watch:** the output file name is taken from the URL as written, and URLs may now contain `;`, `$`, `(`, `)` and `|`. Such a name is legal on Linux but awkward in a shell. Roadmap item C3 (safe file names) matters more because of this change, and must also make sure a decoded name cannot leave the target directory.
+
+---
+
+#### References
+
+- RFC 3986 section 2.2 (reserved characters), the WHATWG URL Standard (host and path parsing)
+- `ROADMAP.md`, item A3
 
 ---
 

@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tests for the resume state machine and retry policy (property tests and a decision table), integration tests for ETag changes, dropped connections, `Retry-After`, and symlinked and device outputs
 - Segmented downloads record their layout (segment count, size, validators) in the `name.part.meta` sidecar and validate it on resume; segment requests carry `If-Range`
 - Tests for segment planning and resume validation (property tests), and integration tests for dropped segments, servers that ignore ranges, changed files and changed segment counts
+- Property tests for URL validation: it never panics on any input, legal paths and queries are always accepted, and a `..` segment is refused in every encoding
 
 ### Changed
 - Restructured the source tree from a flat `src/` into a feature-first layout: `app/` (CLI, config, settings merge, wiring), `features/{download,validation,integrity,input,destination}/`, and `shared/` (progress bar, size parsing). `main.rs` is now a thin entry point. No user-visible behaviour change; verified identical to 1.0.0 across 65 end-to-end cases.
@@ -41,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A segmented resume (`-c`) is accepted only when the URL, size, segment count and remote file are unchanged; otherwise rget says "Existing parts do not match the remote file, starting from scratch". Parts without a sidecar (from 1.0.0, for instance) are still accepted as unvalidated prefixes
 - When a segment fails for good, the download now fails with that segment's own error (it used to print a debug dump such as `1 segments failed: [Network(reqwest::Error { … })]`), and the parts and sidecar are kept so `-c` can continue
 - Parts beyond the current segment count, and parts longer than their range, are deleted instead of being trusted
+- URL validation now judges the parsed URL instead of blacklisting characters in its text. The checks are: `http`/`https` only; a hostname made of letters, digits, `.`, `-` and `_`; no `..` path segment (in any encoding, including `\` and `%2f`); and no well-known secret file (`.env`, `.bashrc`, `.zshrc`, `etc/passwd`, `etc/shadow`, `etc/sudoers`, `.git/config`, `.aws/credentials`, `.ssh/id_rsa`, `.ssh/authorized_keys`) as whole decoded path segments. Only the path is examined for traversal and secret files; the host, query and fragment are not
+- The error for a secret-file URL now names the file (`Access to sensitive file '.env'`) instead of showing a regular expression, and an invalid hostname names the offending character
+- The URL is now parsed and its scheme checked before the content checks run, so `ftp://x/a;b` reports the scheme
+
+### Removed
+- The `regex` dependency, no longer needed by URL validation
 
 ### Fixed
 - Downloads no longer buffer the whole file in memory: the body is streamed through a single 64 KiB buffer (a 400 MiB download peaked at 437 MB before and 24 MB now)
@@ -59,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Resuming a segmented download with a different `--segments`, or after the remote file changed, no longer merges misaligned or mismatched parts into a corrupt file
 - An oversized leftover part no longer makes the merged file too long
 - A segment that was refused ranges no longer prints a spurious "Failed after 1 attempts" before the fallback succeeds
+- URLs containing `&`, `;`, `$`, `|`, `(` or `)` (`?a=1&b=2`, `file(1).zip`, `Rust_(programming_language)`, `;jsessionid=…`), encoded ones such as `%26`, hosts containing `.env` (`foo.environment.com`), names like `.env.example`, and query text such as `?next=../home` are no longer refused as "dangerous"
+
+### Security
+- Path traversal and secret-file checks now also catch the percent-encoded spellings that used to slip through (`%2e%2e`, `%2eenv`, `etc%2fpasswd`); such a URL was previously sent to the server
+- Hostnames containing characters no hostname can hold (`exa;mple.com`, which the URL parser accepts) are refused
 - Segmented downloads from servers that require custom headers or a User-Agent on `HEAD` are now actually segmented instead of silently falling back to one connection
 
 ---
