@@ -16,78 +16,35 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-//! Host-level SSRF guard: refuse loopback and private addresses.
+//! Host-level SSRF guard: refuse loopback, private and other non-public destinations.
+//!
+//! Only what the URL itself says can be judged here: an IP literal, or a name that always
+//! means the local machine. What other names resolve to, and where redirects lead, is checked
+//! while downloading (see the `download` feature).
 
 use super::error::{Error, Result};
+use crate::shared::address::{is_local_name, HostPolicy};
+use std::net::IpAddr;
 use url::{Host, Url};
 
-/// Rejects localhost and private/link-local hosts.
-pub(super) fn ensure_public(url: &Url) -> Result<()> {
-    // Block localhost and private IPs
-    if let Some(host) = url.host() {
-        let host_str = host.to_string();
-
-        // localhost (IPv4 and IPv6)
-        if host_str == "localhost"
-            || host_str == "127.0.0.1"
-            || host_str == "::1"
-        {
-            return Err(Error::BlockedUrl(format!(
-                "Local/private IP addresses are blocked: {}",
-                host_str
-            )));
-        }
-
-        // Private IPv4 ranges
-        if host_str.starts_with("192.168.")
-            || host_str.starts_with("10.")
-            || host_str.starts_with("172.16.")
-            || host_str.starts_with("172.17.")
-            || host_str.starts_with("172.18.")
-            || host_str.starts_with("172.19.")
-            || host_str.starts_with("172.20.")
-            || host_str.starts_with("172.21.")
-            || host_str.starts_with("172.22.")
-            || host_str.starts_with("172.23.")
-            || host_str.starts_with("172.24.")
-            || host_str.starts_with("172.25.")
-            || host_str.starts_with("172.26.")
-            || host_str.starts_with("172.27.")
-            || host_str.starts_with("172.28.")
-            || host_str.starts_with("172.29.")
-            || host_str.starts_with("172.30.")
-            || host_str.starts_with("172.31.")
-        {
-            return Err(Error::BlockedUrl(format!(
-                "Local/private IP addresses are blocked: {}",
-                host_str
-            )));
-        }
-
-        // IPv6 private ranges
-        if let Host::Ipv6(ip) = host {
-            if ip == std::net::Ipv6Addr::LOCALHOST {
-                return Err(Error::BlockedUrl(format!(
-                    "Local/private IP addresses are blocked: {}",
-                    host_str
-                )));
-            }
-            // Unique local addresses (fc00::/7)
-            if ip.segments()[0] & 0xfe00 == 0xfc00 {
-                return Err(Error::BlockedUrl(format!(
-                    "Local/private IP addresses are blocked: {}",
-                    host_str
-                )));
-            }
-            // Link-local (fe80::/10)
-            if ip.segments()[0] & 0xffc0 == 0xfe80 {
-                return Err(Error::BlockedUrl(format!(
-                    "Local/private IP addresses are blocked: {}",
-                    host_str
-                )));
-            }
-        }
+/// Rejects a URL whose host is a non-public address, unless `policy` allows it.
+pub(super) fn ensure_public(url: &Url, policy: HostPolicy) -> Result<()> {
+    if !policy.blocks_private() {
+        return Ok(());
     }
-
+    let refused = match url.host() {
+        Some(Host::Ipv4(ip)) => policy.refuses(IpAddr::V4(ip)),
+        Some(Host::Ipv6(ip)) => policy.refuses(IpAddr::V6(ip)),
+        Some(Host::Domain(name)) => is_local_name(name),
+        None => false,
+    };
+    if refused {
+        // `host()` is `Some` here; its text keeps the brackets of an IPv6 literal.
+        let shown = url.host().map(|h| h.to_string()).unwrap_or_default();
+        return Err(Error::BlockedUrl(format!(
+            "Local/private IP addresses are blocked: {}",
+            shown
+        )));
+    }
     Ok(())
 }

@@ -77,7 +77,7 @@ fn fetch(job: &Job, source: Option<Source>, saved_meta: Option<&PartMeta>, plan:
     let options = job.options;
     let quiet = options.quiet;
     let started = Instant::now();
-    let client = client::build(options.timeout, options.follow_redirects)?;
+    let client = client::build(options.timeout, options.follow_redirects, options.host_policy)?;
 
     let mut request_builder = client.get(job.url);
     if let Plan::Continue { from, if_range } = &plan {

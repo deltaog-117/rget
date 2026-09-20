@@ -23,7 +23,7 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("Network error: {0}")]
-    Network(#[from] reqwest::Error),
+    Network(reqwest::Error),
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -44,6 +44,11 @@ pub enum Error {
     #[error("Timed out: no data received for {0}s")]
     Stalled(u64),
 
+    /// A redirect or a DNS answer led to a local or private address, and the host policy
+    /// forbids contacting those.
+    #[error("Blocked: {0}")]
+    BlockedAddress(String),
+
     /// A segmented download found that the server does not honour byte ranges after all
     /// (it answered `200`, `416`, or the wrong `Content-Range`). The caller falls back to a
     /// single connection.
@@ -52,3 +57,14 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl From<reqwest::Error> for Error {
+    /// Our own refusals travel inside `reqwest`'s error chain (from the redirect policy or the
+    /// resolver); bring them back out as a proper error instead of "Network error".
+    fn from(error: reqwest::Error) -> Self {
+        match super::client::refusal_in(&error) {
+            Some(reason) => Error::BlockedAddress(reason),
+            None => Error::Network(error),
+        }
+    }
+}

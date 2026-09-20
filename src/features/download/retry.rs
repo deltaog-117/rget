@@ -38,7 +38,8 @@ pub(super) fn is_retryable(error: &Error) -> bool {
         Error::Io(_)
         | Error::RedirectDisabled(..)
         | Error::ProtocolError(_)
-        | Error::RangesUnsupported(_) => false,
+        | Error::RangesUnsupported(_)
+        | Error::BlockedAddress(_) => false,
     }
 }
 
@@ -160,6 +161,7 @@ mod tests {
         assert!(!is_retryable(&Error::RedirectDisabled(302, "/x".into())));
         assert!(!is_retryable(&Error::ProtocolError("bad".into())));
         assert!(!is_retryable(&Error::RangesUnsupported("200".into())));
+        assert!(!is_retryable(&Error::BlockedAddress("127.0.0.1".into())));
     }
 
     #[test]

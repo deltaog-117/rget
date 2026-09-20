@@ -89,6 +89,10 @@ pub struct Args {
     #[arg(short = 'i', long)]
     pub input_file: Option<String>,
 
+    /// Allow downloads from loopback, private and link-local addresses (blocked by default)
+    #[arg(long)]
+    pub allow_private: bool,
+
     /// Ignore config file
     #[arg(long)]
     pub no_config: bool,

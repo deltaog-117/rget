@@ -24,6 +24,7 @@
 //! Routes:
 //! - `/file`: the payload, with an `ETag`, honouring `Range` (and `If-Range`) unless disabled
 //! - `/redirect`: 302 to `/file`
+//! - `/redirect-metadata`: 302 to `http://169.254.169.254:9/latest`, the cloud metadata address
 //! - `/status/<code>`: that status with a short body
 //! - `/once/<code>`: that status the first time (with `Retry-After: 1` for 429), then `/file`
 //! - `/long/503`: always 503 with `Retry-After: 300`
@@ -35,12 +36,14 @@
 //! - `/stall`: half the payload, then silence
 //! - `/guarded`: like `/file`, but 403 unless the request carries `X-Token: ok` and `User-Agent: probe/1`
 
+mod hosts;
 mod resume;
 mod retry;
 mod segmented;
 mod single;
 
 use rget::features::download::DownloadOptions;
+use rget::shared::address::HostPolicy;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -66,6 +69,8 @@ pub(crate) fn options() -> DownloadOptions {
         limit_rate: None,
         segments: 1,
         headers: Vec::new(),
+        // The test server is on loopback.
+        host_policy: HostPolicy::AllowPrivate,
     }
 }
 
@@ -216,6 +221,13 @@ fn handle(mut stream: TcpStream, config: &Config, stats: &Stats, seen: &Mutex<Ha
     let payload = &config.payload;
     match effective {
         "/redirect" => respond(&mut stream, "302 Found", "Location: /file\r\n", &[], head_only),
+        "/redirect-metadata" => respond(
+            &mut stream,
+            "302 Found",
+            "Location: http://169.254.169.254:9/latest\r\n",
+            &[],
+            head_only,
+        ),
         "/forbidden" => respond(&mut stream, "403 Forbidden", "", b"forbidden", head_only),
         "/long/503" => respond(&mut stream, "503 Test", "Retry-After: 300\r\n", b"later", head_only),
         "/lying" => respond(

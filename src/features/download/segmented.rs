@@ -32,6 +32,7 @@ use super::resume::parse_content_range;
 use super::retry;
 use super::stream;
 use super::throttle::Throttle;
+use crate::shared::address::HostPolicy;
 use crate::shared::progress::ProgressBarWrapper;
 use indicatif::{MultiProgress, ProgressBar};
 use reqwest::header::{ACCEPT_RANGES, CONTENT_RANGE, IF_RANGE, RANGE};
@@ -46,6 +47,7 @@ struct Shared {
     url: String,
     timeout: u64,
     follow_redirects: bool,
+    host_policy: HostPolicy,
     user_agent: Option<String>,
     headers: Vec<(String, String)>,
     /// Validator from the probe, so a file that changes mid-download is noticed.
@@ -70,7 +72,7 @@ fn fetch_segment(shared: &Shared, index: usize, part_path: &Path, (start, end): 
     }
 
     let first = start + have;
-    let client = client::build(shared.timeout, shared.follow_redirects)?;
+    let client = client::build(shared.timeout, shared.follow_redirects, shared.host_policy)?;
     let mut request_builder = client.get(&shared.url).header(RANGE, format!("bytes={}-{}", first, end));
     if let Some(validator) = &shared.if_range {
         request_builder = request_builder.header(IF_RANGE, validator);
@@ -156,7 +158,7 @@ pub(super) fn download(
     let quiet = options.quiet;
     let segments = options.segments;
 
-    let client = client::build(options.timeout, options.follow_redirects)?;
+    let client = client::build(options.timeout, options.follow_redirects, options.host_policy)?;
 
     // The probe carries the same headers as the real requests, so servers that need
     // auth or a User-Agent answer it, and a disabled redirect policy is respected.
@@ -270,6 +272,7 @@ pub(super) fn download(
         url: url.to_string(),
         timeout: options.timeout,
         follow_redirects: options.follow_redirects,
+        host_policy: options.host_policy,
         user_agent: options.user_agent.clone(),
         headers: options.headers.clone(),
         if_range: current.validator().map(str::to_string),

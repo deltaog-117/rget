@@ -21,6 +21,7 @@
 use super::cli::Args;
 use super::config::Config;
 use crate::features::download::DownloadOptions;
+use crate::shared::address::HostPolicy;
 
 /// Effective settings: a CLI value wins over the config file, which wins over the default.
 #[derive(Debug)]
@@ -36,6 +37,7 @@ pub struct Settings {
     pub segments: usize,
     pub directory_prefix: Option<String>,
     pub headers: Vec<(String, String)>,
+    pub allow_private: bool,
 }
 
 impl Settings {
@@ -62,7 +64,13 @@ impl Settings {
                 .or(config.directory_prefix.as_ref())
                 .cloned(),
             headers: parse_headers(&args.header),
+            allow_private: args.allow_private || config.allow_private.unwrap_or(false),
         }
+    }
+
+    /// Whether local and private destinations may be contacted (`--allow-private`).
+    pub fn host_policy(&self) -> HostPolicy {
+        if self.allow_private { HostPolicy::AllowPrivate } else { HostPolicy::BlockPrivate }
     }
 
     /// The subset of settings the download feature cares about.
@@ -77,6 +85,7 @@ impl Settings {
             limit_rate: self.limit_rate,
             segments: self.segments,
             headers: self.headers.clone(),
+            host_policy: self.host_policy(),
         }
     }
 }

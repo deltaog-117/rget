@@ -18,6 +18,8 @@
 
 //! Everything a download needs besides the URL and the destination.
 
+use crate::shared::address::HostPolicy;
+
 /// Per-download settings, resolved once by the caller.
 #[derive(Debug, Clone)]
 pub struct DownloadOptions {
@@ -30,4 +32,6 @@ pub struct DownloadOptions {
     pub limit_rate: Option<usize>,
     pub segments: usize,
     pub headers: Vec<(String, String)>,
+    /// Whether redirects and DNS answers that lead to local or private addresses are refused.
+    pub host_policy: HostPolicy,
 }

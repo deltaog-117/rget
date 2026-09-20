@@ -20,5 +20,6 @@
 //!
 //! Nothing in here may import from `features/` or `app/`; dependencies point inward.
 
+pub mod address;
 pub mod progress;
 pub mod size;

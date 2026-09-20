@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Segmented downloads record their layout (segment count, size, validators) in the `name.part.meta` sidecar and validate it on resume; segment requests carry `If-Range`
 - Tests for segment planning and resume validation (property tests), and integration tests for dropped segments, servers that ignore ranges, changed files and changed segment counts
 - Property tests for URL validation: it never panics on any input, legal paths and queries are always accepted, and a `..` segment is refused in every encoding
+- `--allow-private` (and `allow_private` in the config file) to allow downloads from loopback, private and link-local addresses, which are otherwise refused
+- A refused destination is reported as its own error, `Blocked: …`, naming the address or the redirect target; it is never retried
+- Tests for network-address classification (checked against an independent table over 20,000 addresses), for refused redirects and names against a local server, and for file-name safety (no percent-encoding of a URL segment can produce a name outside the download directory)
 
 ### Changed
 - Restructured the source tree from a flat `src/` into a feature-first layout: `app/` (CLI, config, settings merge, wiring), `features/{download,validation,integrity,input,destination}/`, and `shared/` (progress bar, size parsing). `main.rs` is now a thin entry point. No user-visible behaviour change; verified identical to 1.0.0 across 65 end-to-end cases.
@@ -42,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A segmented resume (`-c`) is accepted only when the URL, size, segment count and remote file are unchanged; otherwise rget says "Existing parts do not match the remote file, starting from scratch". Parts without a sidecar (from 1.0.0, for instance) are still accepted as unvalidated prefixes
 - When a segment fails for good, the download now fails with that segment's own error (it used to print a debug dump such as `1 segments failed: [Network(reqwest::Error { … })]`), and the parts and sidecar are kept so `-c` can continue
 - Parts beyond the current segment count, and parts longer than their range, are deleted instead of being trusted
+- Addresses are classified by one function instead of matching the start of the host text. Refused: loopback (all of `127/8`), private, link-local (including `169.254.169.254`, the cloud metadata address), carrier-grade NAT, unspecified, multicast, broadcast, reserved and documentation ranges, IPv6 unique-local and link-local, and IPv6 addresses that wrap an IPv4 address (IPv4-mapped, NAT64, 6to4), which are judged by the address inside. `localhost` and everything under it are refused by name
+- Redirects are checked at every hop, and hostnames are resolved through a filter that drops non-public addresses (a name that resolves only to such addresses is refused). The connection is made to exactly the addresses the filter returns, so a name cannot be checked as harmless and then resolved to something else
+- A file name taken from a URL is now percent-decoded and cleaned: `/`, `\`, control characters and invisible text-direction characters become `_`, a leading `-` becomes `_`, `.`, `..` and blanks fall back to `downloaded`, and a name is cut to 240 bytes on a character boundary (keeping `.tar.gz`-style extensions). A name given with `-O` is used as written
+- `--init` now writes a commented `allow_private` line to the generated config
 - URL validation now judges the parsed URL instead of blacklisting characters in its text. The checks are: `http`/`https` only; a hostname made of letters, digits, `.`, `-` and `_`; no `..` path segment (in any encoding, including `\` and `%2f`); and no well-known secret file (`.env`, `.bashrc`, `.zshrc`, `etc/passwd`, `etc/shadow`, `etc/sudoers`, `.git/config`, `.aws/credentials`, `.ssh/id_rsa`, `.ssh/authorized_keys`) as whole decoded path segments. Only the path is examined for traversal and secret files; the host, query and fragment are not
 - The error for a secret-file URL now names the file (`Access to sensitive file '.env'`) instead of showing a regular expression, and an invalid hostname names the offending character
 - The URL is now parsed and its scheme checked before the content checks run, so `ftp://x/a;b` reports the scheme
@@ -50,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `regex` dependency, no longer needed by URL validation
 
 ### Fixed
+- File names taken from a URL are no longer saved with their percent-escapes (`a%20b.txt` is now `a b.txt`)
 - Downloads no longer buffer the whole file in memory: the body is streamed through a single 64 KiB buffer (a 400 MiB download peaked at 437 MB before and 24 MB now)
 - Downloads that take longer than the timeout (default 30s) no longer fail while data is still arriving
 - HTTP error responses (404, 500, …) are no longer saved as the output file and reported as complete; they fail with `HTTP error: <status>` and leave the destination untouched
@@ -69,6 +77,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - URLs containing `&`, `;`, `$`, `|`, `(` or `)` (`?a=1&b=2`, `file(1).zip`, `Rust_(programming_language)`, `;jsessionid=…`), encoded ones such as `%26`, hosts containing `.env` (`foo.environment.com`), names like `.env.example`, and query text such as `?next=../home` are no longer refused as "dangerous"
 
 ### Security
+- A redirect from an allowed host to a loopback, private or link-local address, and a hostname that resolves to one, used to be followed, so a URL could make rget read an internal service (a local one was read back and written to disk in testing). Both are now refused, including for segmented downloads
+- Nine of fifteen loopback and private spellings passed the old check (`127.0.0.2`, `0.0.0.0`, `169.254.169.254`, `100.64.0.1`, `[::ffff:127.0.0.1]`, `[::ffff:7f00:1]`, `[::]`, `foo.localhost`, `localhost.`); all are now refused
+- Decoding percent-escapes in a URL-derived file name cannot escape the download directory: `..%2f..%2fetc%2fx` is saved as `.._.._etc_x`
 - Path traversal and secret-file checks now also catch the percent-encoded spellings that used to slip through (`%2e%2e`, `%2eenv`, `etc%2fpasswd`); such a URL was previously sent to the server
 - Hostnames containing characters no hostname can hold (`exa;mple.com`, which the URL parser accepts) are refused
 - Segmented downloads from servers that require custom headers or a User-Agent on `HEAD` are now actually segmented instead of silently falling back to one connection

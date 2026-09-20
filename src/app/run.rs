@@ -98,7 +98,7 @@ pub fn run() -> Result<()> {
     // --- BUILD TASKS ---
     let mut tasks: Vec<(String, String)> = Vec::new();
     for url_str in &urls {
-        let url = validation::validate_url(url_str)?;
+        let url = validation::validate_url_with(url_str, settings.host_policy())?;
         let base_name = destination::file_name_for(&url, args.output.as_deref());
         let output_path = destination::output_path(
             &base_name,
@@ -142,6 +142,9 @@ pub fn run() -> Result<()> {
         }
         if !settings.headers.is_empty() {
             eprintln!("📋 Custom headers: {:?}", settings.headers);
+        }
+        if settings.allow_private {
+            eprintln!("🛡️  Private addresses: allowed (--allow-private)");
         }
         if !args.no_config {
             eprintln!("⚙️  Config: ~/.config/rget/config.toml");

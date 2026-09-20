@@ -34,6 +34,7 @@ pub struct Config {
     pub limit_rate: Option<usize>,
     pub segments: Option<usize>,
     pub directory_prefix: Option<String>,
+    pub allow_private: Option<bool>,
 }
 
 impl Config {
@@ -89,6 +90,7 @@ resume = false
 limit_rate = 1048576  # 1 MB/s
 segments = 1          # Number of parallel segments for a single file
 # directory_prefix = "/path/to/downloads"
+# allow_private = false   # set to true to allow loopback, private and link-local addresses
 "#;
             fs::write(&path, default_config)?;
         }

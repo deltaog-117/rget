@@ -24,18 +24,28 @@ mod sanitize;
 
 pub use error::{Error, Result};
 
+use crate::shared::address::HostPolicy;
 use url::Url;
+
+/// Checks that `url_str` is a URL rget is willing to fetch and returns it parsed, refusing
+/// local and private hosts.
+///
+/// See [`validate_url_with`] for the rules and the errors.
+pub fn validate_url(url_str: &str) -> Result<Url> {
+    validate_url_with(url_str, HostPolicy::BlockPrivate)
+}
 
 /// Checks that `url_str` is a URL rget is willing to fetch and returns it parsed.
 ///
 /// The URL must parse, use `http` or `https`, pass the content checks (a plausible hostname,
-/// no path traversal, no well-known secret file) and not point at a local or private host.
+/// no path traversal, no well-known secret file) and, unless `policy` allows private hosts,
+/// not point at a loopback, private or otherwise non-public address.
 ///
 /// # Errors
 ///
 /// [`Error::InvalidUrl`] for a malformed or unsafe URL, [`Error::BlockedUrl`] for a local or
 /// private host.
-pub fn validate_url(url_str: &str) -> Result<Url> {
+pub fn validate_url_with(url_str: &str, policy: HostPolicy) -> Result<Url> {
     let url = Url::parse(url_str).map_err(|_| Error::InvalidUrl(url_str.to_string()))?;
 
     // Only allow HTTP/HTTPS
@@ -48,7 +58,7 @@ pub fn validate_url(url_str: &str) -> Result<Url> {
     }
 
     sanitize::check(url_str, &url)?;
-    host::ensure_public(&url)?;
+    host::ensure_public(&url, policy)?;
 
     Ok(url)
 }

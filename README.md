@@ -39,7 +39,7 @@ Whether you're a developer downloading dependencies, a sysadmin fetching logs, o
 - 🚦 **Rate limiting** (`--limit-rate`) — Control bandwidth usage
 - 📋 **Custom headers** (`-H`) — Add authentication tokens, etc.
 - 🧹 **Quiet mode** (`-q`) — Suppress all non‑error output
-- 🛡️ **Block localhost & private IPs** — Prevents SSRF attacks
+- 🛡️ **Blocks local and private destinations** — Refuses loopback, private, link-local (including the cloud metadata address) and reserved addresses, whether they appear in the URL, in a **redirect**, or as what a **hostname resolves to**; `--allow-private` opts out
 - 🔁 **Batch downloads** (`-i`) — Download from a file or stdin
 
 ---
@@ -122,6 +122,12 @@ rget -j 4 url1.zip url2.zip url3.zip url4.zip
 rget -H "Authorization: Bearer $TOKEN" https://example.com/protected.zip
 ```
 
+### Download from a local or private address
+```bash
+rget --allow-private http://192.168.1.20:8000/backup.tar.gz
+```
+Loopback, private and link-local addresses (`127.0.0.1`, `192.168.x.x`, `169.254.x.x`, …) are refused by default, so a URL, a redirect or a DNS name cannot be used to make rget read something on your own machine or network. `--allow-private` (or `allow_private = true` in the config file) turns that off, for a development server or a NAS.
+
 ### Batch download from a file
 ```bash
 # Create a file with one URL per line
@@ -186,6 +192,7 @@ resume = false            # Resume downloads by default
 limit_rate = 1048576      # 1 MB/s rate limit
 segments = 1              # Number of parallel segments for a single file
 # directory_prefix = "/path/to/downloads"  # Default output directory
+# allow_private = false   # Allow loopback, private and link-local addresses
 ```
 
 **CLI arguments override config values.**
@@ -194,24 +201,31 @@ segments = 1              # Number of parallel segments for a single file
 
 ## 📁 Project Structure
 
+Organised by feature: each folder under `features/` is one capability and never imports another; `app/` is the only place that wires them together.
+
 ```
 rget/
 ├── src/
-│   ├── main.rs          # CLI entry point
-│   ├── cli.rs           # Argument parsing
-│   ├── download.rs      # Core download logic
-│   ├── validator.rs     # URL/input validation
-│   ├── progress.rs      # Progress bar
-│   ├── error.rs         # Custom error types
-│   ├── checksum.rs      # Hash verification
-│   └── config.rs        # Configuration file handling
-├── docs/
-│   └── rget.1           # Unix man page
-├── Cargo.toml           # Dependencies and metadata
-├── README.md            # This file
-├── LICENSE              # GPLv3 License
-├── CHANGELOG.md         # Version history
-└── CONTRIBUTING.md      # Contribution guidelines
+│   ├── main.rs              # thin entry point
+│   ├── lib.rs               # crate root (so tests/ can use the public API)
+│   ├── app/                 # CLI arguments, config file, settings, and the wiring
+│   ├── features/
+│   │   ├── download/        # single and segmented downloads, resume, retries, host policy
+│   │   ├── validation/      # is this URL safe to fetch?
+│   │   ├── integrity/       # SHA-256 verification
+│   │   ├── input/           # reading URLs from a file or stdin
+│   │   └── destination/     # where the file goes, and what it is called
+│   └── shared/              # progress bar, sizes, network-address classification
+├── tests/
+│   ├── unit/                # mirrors src/
+│   └── integration/         # the public API against a local HTTP server
+├── benches/                 # download throughput (criterion)
+├── Cargo.toml               # Dependencies and metadata
+├── README.md                # This file
+├── ROADMAP.md               # What is done and what is next
+├── DIARY.md                 # Why things are the way they are
+├── LICENSE                  # GPLv3 License
+└── CHANGELOG.md             # Version history
 ```
 
 ---
@@ -219,14 +233,14 @@ rget/
 ## 🧪 Testing
 
 ```bash
-# Run all tests
+# Run everything: unit, integration (against a local server) and property tests
 cargo test
 
-# Run with verbose output
-cargo test -- --nocapture
+# Run the property tests with many more cases
+PROPTEST_CASES=50000 cargo test
 
-# Run specific test
-cargo test test_download
+# Measure download throughput
+cargo bench
 ```
 
 ---
@@ -239,7 +253,8 @@ rget is built with security as a priority:
 - **Memory‑safe** — No `unsafe` code
 - **URL checks** — Only `http`/`https`; refuses path traversal, well-known secret-file paths and hostnames no DNS name can contain. The checks look at what a URL *means* once parsed, so legitimate URLs (`?a=1&b=2`, `file(1).zip`) are never refused
 - **TLS hardening** — Uses `rustls` with modern cipher suites
-- **Private IP blocking** — Prevents SSRF attacks
+- **Private address blocking** — Prevents SSRF: loopback, private, link-local and reserved addresses are refused in the URL, in redirects, and in what a name resolves to (checked at connection time, so DNS rebinding cannot swap the address). A configured system proxy does its own DNS and is outside this check
+- **Safe file names** — A name taken from a URL is percent-decoded and cleaned (`/`, control characters, a leading `-`, `..`), so it can only ever name a file inside the download directory
 
 ### Security Comparison
 

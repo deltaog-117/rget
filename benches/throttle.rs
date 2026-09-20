@@ -25,6 +25,7 @@
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use rget::features::download::{download_file, DownloadOptions};
+use rget::shared::address::HostPolicy;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
@@ -66,6 +67,7 @@ fn options(limit_rate: Option<usize>) -> DownloadOptions {
         limit_rate,
         segments: 1,
         headers: Vec::new(),
+        host_policy: HostPolicy::AllowPrivate, // the benchmark server is on loopback
     }
 }
 

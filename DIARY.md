@@ -20,6 +20,8 @@
 | 2026-09-20 | Retry policy | Classify errors; honour `Retry-After` (cap 60s) | ✅ Confirmed |
 | 2026-09-20 | Segmented parts, validation and merge | Keep part files, sidecar layout check, `io::copy` merge | ✅ Confirmed |
 | 2026-09-20 | URL validation | Judge the parsed URL: hostname, `..` segments, secret-file segments | ✅ Confirmed |
+| 2026-09-20 | Host policy (SSRF) and `--allow-private` | Classify addresses; guard redirects; filter DNS answers | ✅ Confirmed |
+| 2026-09-20 | Names taken from URLs | Decode, then sanitize; defer `Content-Disposition` | ✅ Confirmed |
 
 ---
 
@@ -820,6 +822,171 @@ This is a security feature that the README advertises, so the decision started f
 
 - RFC 3986 section 2.2 (reserved characters), the WHATWG URL Standard (host and path parsing)
 - `ROADMAP.md`, item A3
+
+---
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-09-20 | Initial entry | deltaog-117 |
+
+---
+
+### Host Policy: Refusing Local and Private Destinations
+
+**Date:** 2026-09-20
+**Status:** Confirmed
+
+---
+
+#### Context / Background
+
+The validator refused hosts by matching the start of the host *text* (`192.168.`, `10.`, `172.16.` … `127.0.0.1`). Probing it showed how thin that was: **9 of 15** loopback and private spellings passed, including `127.0.0.2`, `0.0.0.0`, `169.254.169.254` (the cloud metadata address), carrier-grade NAT, `[::ffff:127.0.0.1]`, `[::]`, `foo.localhost` and `localhost.`. The URL parser already normalises number spellings (`2130706433`, `0x7f.1`), so those were caught.
+
+A literal-address check can also never see the two routes that matter most for a downloader. With a throwaway pair of local servers I confirmed both: a direct request to an internal service was refused, but **the same service was fetched through a redirect** from a host the validator allowed, and **through a hostname that resolves to loopback**; in both cases its content was written to disk. Redirects are followed by default and were never re-checked, and hostnames were never checked at all.
+
+---
+
+#### Options Considered
+
+**Option A: Classify addresses, and re-check every redirect hop**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Small <br> • Fixes every literal-address miss and the redirect hole |
+| **Disadvantages** | • A DNS name that leads to a private address (`localtest.me`, `*.nip.io`) still gets through |
+| **Implementation Difficulty** | Medium |
+| **Fit with Constraints** | Not enough |
+
+**Option B: A, plus a filtering DNS resolver installed on every client**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Closes every hole demonstrated <br> • The connection is made to exactly the addresses the resolver returns, so there is no gap between "checked" and "connected" (DNS rebinding) <br> • Covers every redirect hop's hostnames for free |
+| **Disadvantages** | • `tokio` becomes a direct dependency (already in the tree through `reqwest`) <br> • Some async plumbing |
+| **Implementation Difficulty** | Medium–Hard |
+| **Fit with Constraints** | Best |
+
+**Option C: B, plus a pre-flight lookup in validation for a friendlier error**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • A nicer early message |
+| **Disadvantages** | • A second lookup and a check-then-connect gap <br> • No added protection over B |
+| **Implementation Difficulty** | Hard |
+| **Fit with Constraints** | Poor |
+
+---
+
+#### Decision & Rationale
+
+**Chosen Option:** B, with `--allow-private` added in the same cycle.
+
+**Why C2 came along:** fixing the classifier makes `127.0.0.2` unreachable, and the end-to-end harness, development servers and machines on a home network all depend on reaching such addresses. Without an opt-out the fix would have been unusable for them; the flag was small once the plumbing existed.
+
+**How it is built:**
+- **`shared/address.rs`** holds the one pure function, `is_public(ip)`, and the `HostPolicy` enum. It lives in `shared` so that `validation` and `download` can both use it without importing each other (the Delete Test). IPv4: `0/8`, `10/8`, `100.64/10`, `127/8`, `169.254/16`, `172.16/12`, `192.0.0/24`, `192.168/16`, `198.18/15`, the documentation ranges, `224/4` and `240/4`. IPv6: `::`, `::1`, `fc00::/7`, `fe80::/10`, `fec0::/10`, `ff00::/8`, `2001:db8::/32`, and addresses that wrap an IPv4 one (IPv4-mapped, the deprecated IPv4-compatible form, NAT64 `64:ff9b::/96`, 6to4 `2002::/16`), which are judged by the address inside. `localhost` and `*.localhost` are refused by name.
+- **Validation** checks the initial URL (an IP literal, or a local name). **Download** checks what validation cannot: redirect hops (a custom redirect policy that refuses a destination before connecting) and hostnames (a resolver that drops non-public answers and refuses a name that has only such answers). Because the download does not re-check the initial URL, a loopback test server can stand in for "a host that was let through".
+- **Errors:** a refusal travels inside `reqwest`'s error chain and is brought back out as `Error::BlockedAddress`, which is never retried.
+- **Mixed DNS answers:** private addresses are filtered out and the public ones used; the name is refused only if none remain.
+
+**Things caught along the way:**
+- My first name test used `localhost`, which the *name rule* refuses before the resolver ever runs, so nothing yet proved that the resolver was installed and that a refusal survived `reqwest`'s error chain. I made the lookup injectable and added unit tests that drive an invented name that resolves to loopback through the real client.
+- One of those tests had a wrong premise: with `--allow-private` no resolver is installed at all, so the injected lookup is never used. The correct assertion is that nothing is filtered.
+- The classifier is checked against an independently written CIDR table (`(network, prefix)` pairs) over 20,000 random IPv4 addresses, plus properties that a wrapped IPv6 address is judged like the IPv4 address inside it.
+- Ten mutations (forgetting CGNAT, ignoring wrapped IPv6, following every redirect, not installing the resolver, keeping private answers, ignoring local names, and four for file names) each made a specific test fail.
+
+**Trade-offs and limits accepted:**
+- A configured system proxy does its own DNS, so the resolver cannot police it. Only the literal-address and redirect checks apply (roadmap D13).
+- An address that is globally routable but belongs to this machine cannot be recognised as local. A hostname on the development machine resolved to its own global IPv6 address, which is correctly "public".
+- The end-to-end harness cannot exercise redirect and DNS blocking, because that needs a first hop that passes validation and no such address exists locally. The integration and unit tests cover them.
+- `--allow-private` turns off every part of the policy (validation, redirects and the resolver filter) together.
+
+---
+
+#### References
+
+- RFC 6761 (special-use names), RFC 6890 (special-purpose address registries), the OWASP SSRF prevention cheat sheet
+- `ROADMAP.md`, items C1 and C2
+
+---
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-09-20 | Initial entry | deltaog-117 |
+
+---
+
+### Names Taken from URLs
+
+**Date:** 2026-09-20
+**Status:** Confirmed
+
+---
+
+#### Context / Background
+
+The output name came straight from the last path segment of the URL, still percent-encoded, so `a%20b.txt` was saved as `a%20b.txt` (pinned by a `known_defect_*` test). Simply decoding it would have been *worse*: `..%2f..%2fetc%2fcron.d%2fx` decodes to `../../etc/cron.d/x`, and joining that to the download directory would leave it. Decoding therefore had to come with sanitization. The A3 change made this more pressing, because URLs may now contain `;`, `$`, `(`, `)` and `|`.
+
+---
+
+#### Options Considered
+
+**Option A: Decode, then sanitize URL-derived names**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Small and safe <br> • Property-testable: the result is always exactly one path component |
+| **Disadvantages** | • A few names now differ from the URL text |
+| **Implementation Difficulty** | Easy |
+| **Fit with Constraints** | Best |
+
+**Option B: A, plus `Content-Disposition`**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Matches `curl -J` and `wget --content-disposition` |
+| **Disadvantages** | • The name must be known before the request: resume looks for `name.part` by name, and no-clobber needs it too <br> • Needs an extra `HEAD`, or `download` choosing the path after the headers |
+| **Implementation Difficulty** | Hard |
+| **Fit with Constraints** | Conflicts with resume |
+
+**Option C: Refuse suspicious names**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Simple rule |
+| **Disadvantages** | • Hostile to legitimate names |
+| **Implementation Difficulty** | Easy |
+| **Fit with Constraints** | Poor |
+
+---
+
+#### Decision & Rationale
+
+**Chosen Option:** A. `Content-Disposition` is deferred as roadmap item D12.
+
+**Rules** (`filename.rs`): a name given with `-O` is the user's choice and is used as written. Otherwise the last path segment is percent-decoded (if the bytes are not valid UTF-8 the text is left as written rather than guessed at), then `/`, `\`, control characters and invisible text-direction characters (used to disguise an extension) become `_`; the result is trimmed; `.`, `..` and a blank fall back to `downloaded`; a leading `-` becomes `_`, so `rm *` cannot read a file called `-rf` as an option; and a name longer than 240 bytes is cut on a character boundary, keeping a short extension (`.gz`, or `.tar.gz`). The 240 leaves room for the `.part` and `.part.meta` suffixes the download adds. Legal characters such as `; $ ( ) |` and spaces are kept: `file(1).zip` stays `file(1).zip`. The real hazard is a leading dash, not shell metacharacters in a name.
+
+**What the tests establish:** for any string, encoded fully or pushed through the URL library's segment encoder, the result is exactly one ordinary path component, is not `.` or `..`, is at most 240 bytes, has no control characters and no leading dash, and `dir.join(name)` has `dir` as its parent. Removing the slash replacement makes that property fail, which is the very hazard decoding could have introduced.
+
+**Things caught along the way:**
+- Two of my first test expectations were wrong (`--help.txt` becomes `_-help.txt`, not `__help.txt`, since only the first character matters; and a tab becomes `_`, not the fallback).
+- One *design* point improved: my first version kept only the last extension, turning a long `….tar.gz` into `….gz`. Keeping a short compound extension is nicer, so the code changed, not the test.
+- At 50,000 cases, a round-trip property aborted with "too many global rejects", because its generator produced stems ending in a space that a `prop_assume!` then discarded. The fault was in the test's generator, not the code; it now cannot generate such stems.
+
+**Trade-offs accepted:**
+- `-O` names are not sanitized, on purpose.
+- A name made only of replaced characters becomes `_` and is kept.
+- `Content-Disposition` is not honoured yet (D12).
+
+---
+
+#### References
+
+- `ROADMAP.md`, item C3
 
 ---
 
