@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 183704d9ce9083c420a9b95840c229f5e18efc4cfc022bf1c5d4045a5cb906fc # shrinks to policy = Overwrite, names = ["c", "c"], existing = []

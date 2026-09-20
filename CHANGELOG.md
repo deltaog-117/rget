@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--allow-private` (and `allow_private` in the config file) to allow downloads from loopback, private and link-local addresses, which are otherwise refused
 - A refused destination is reported as its own error, `Blocked: …`, naming the address or the redirect target; it is never retried
 - Tests for network-address classification (checked against an independent table over 20,000 addresses), for refused redirects and names against a local server, and for file-name safety (no percent-encoding of a URL segment can produce a name outside the download directory)
+- `--if-exists overwrite|skip|rename` (and `if_exists` in the config file) says what to do when the file already exists; `-n`/`--no-clobber` is short for `skip`. The default is unchanged (overwrite). `skip` leaves the file alone and exits 0; `rename` saves the new download as `file (1).zip`, `file (2).zip`, … (`archive (1).tar.gz` for a tarball)
+- A checksum given with `--sha256` is verified on the finished file before it is put in place, and an existing file that is skipped is verified too
+- Tests for digest parsing, name claiming, option merging, verification before placement, and a file appearing while a download runs
 
 ### Changed
 - Restructured the source tree from a flat `src/` into a feature-first layout: `app/` (CLI, config, settings merge, wiring), `features/{download,validation,integrity,input,destination}/`, and `shared/` (progress bar, size parsing). `main.rs` is now a thin entry point. No user-visible behaviour change; verified identical to 1.0.0 across 65 end-to-end cases.
@@ -49,6 +52,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Redirects are checked at every hop, and hostnames are resolved through a filter that drops non-public addresses (a name that resolves only to such addresses is refused). The connection is made to exactly the addresses the filter returns, so a name cannot be checked as harmless and then resolved to something else
 - A file name taken from a URL is now percent-decoded and cleaned: `/`, `\`, control characters and invisible text-direction characters become `_`, a leading `-` becomes `_`, `.`, `..` and blanks fall back to `downloaded`, and a name is cut to 240 bytes on a character boundary (keeping `.tar.gz`-style extensions). A name given with `-O` is used as written
 - `--init` now writes a commented `allow_private` line to the generated config
+- The end of a download is now one atomic step: the file is checked (`--sha256`), then put in place. Under `skip` and `rename` the name is claimed with a hard link, which fails if the name exists, so a file that appears while the download runs is kept and the download is discarded or saved under the next free number. On a filesystem without hard links it falls back to a check followed by a rename
+- Names are settled one URL at a time before any download starts. Two URLs in one command that map to the same file name no longer share it: the later one is numbered (or skipped with `-n`), whatever the policy
+- `--sha256` accepts the digest in either case, and a whole `sha256sum` line may be pasted; anything that is not 64 hexadecimal digits is refused as a usage error (exit 2) before any download starts
+- A checksum mismatch is now an ordinary per-URL failure (`❌ <url> -> Verification failed: Checksum mismatch: expected …, got …`, exit 1) instead of Rust's debug output, and it is not retried
+- `-c` cannot be combined with `-n` or `--if-exists skip|rename` on the command line; a `skip` or `rename` default in the config file does not apply to a run that resumes
+- `download_file` and the pool now report an `Outcome` (`Saved` with the path actually used, or `Skipped`)
 - URL validation now judges the parsed URL instead of blacklisting characters in its text. The checks are: `http`/`https` only; a hostname made of letters, digits, `.`, `-` and `_`; no `..` path segment (in any encoding, including `\` and `%2f`); and no well-known secret file (`.env`, `.bashrc`, `.zshrc`, `etc/passwd`, `etc/shadow`, `etc/sudoers`, `.git/config`, `.aws/credentials`, `.ssh/id_rsa`, `.ssh/authorized_keys`) as whole decoded path segments. Only the path is examined for traversal and secret files; the host, query and fragment are not
 - The error for a secret-file URL now names the file (`Access to sensitive file '.env'`) instead of showing a regular expression, and an invalid hostname names the offending character
 - The URL is now parsed and its scheme checked before the content checks run, so `ftp://x/a;b` reports the scheme
@@ -57,6 +66,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `regex` dependency, no longer needed by URL validation
 
 ### Fixed
+- Two URLs that map to the same file name in one command no longer silently lose one of them (the file used to be replaced by the later URL, or, with `-j`, by whichever finished last)
+- A download that fails its `--sha256` check no longer replaces an existing good file, and is no longer left in place: the finished download is deleted, so a later `-c` cannot mistake it for a complete file
+- An upper-case digest no longer reports a mismatch
+- A malformed digest is no longer discovered only after the whole file has been downloaded
 - File names taken from a URL are no longer saved with their percent-escapes (`a%20b.txt` is now `a b.txt`)
 - Downloads no longer buffer the whole file in memory: the body is streamed through a single 64 KiB buffer (a 400 MiB download peaked at 437 MB before and 24 MB now)
 - Downloads that take longer than the timeout (default 30s) no longer fail while data is still arriving

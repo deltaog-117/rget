@@ -26,8 +26,9 @@
 use super::client;
 use super::error::{Error, Result};
 use super::options::DownloadOptions;
+use super::outcome::Outcome;
 use super::parts;
-use super::partial::{PartMeta, Target};
+use super::partial::{Finished, PartMeta, Target};
 use super::resume::parse_content_range;
 use super::retry;
 use super::stream;
@@ -154,7 +155,7 @@ pub(super) fn download(
     output_path: &str,
     options: &DownloadOptions,
     multi_progress: Option<&MultiProgress>,
-) -> Result<()> {
+) -> Result<Outcome> {
     let quiet = options.quiet;
     let segments = options.segments;
 
@@ -334,15 +335,23 @@ pub(super) fn download(
 
     // The merged file is staged as `name.part` and renamed, like a single-connection download.
     parts::merge_parts(target.work_path(), &part_paths, &ranges)?;
-    target.finish()?;
+    // Checked before anything is put in place, so a bad download replaces nothing.
+    target.verify(options.verify.as_ref())?;
+    let finished = target.finish(&options.on_occupied)?;
 
     if let Some(p) = progress {
         p.finish();
     }
 
     if !quiet {
-        eprintln!("\n✅ Download complete: {}", output_path);
+        match &finished {
+            Finished::Placed(path) => eprintln!("\n✅ Download complete: {}", path.display()),
+            Finished::Skipped(path) => eprintln!(
+                "\nA file appeared at {} while downloading; keeping it and discarding this download",
+                path.display()
+            ),
+        }
     }
 
-    Ok(())
+    Ok(finished.into_outcome())
 }

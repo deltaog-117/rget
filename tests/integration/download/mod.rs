@@ -37,12 +37,14 @@
 //! - `/guarded`: like `/file`, but 403 unless the request carries `X-Token: ok` and `User-Agent: probe/1`
 
 mod hosts;
+mod placement;
 mod resume;
 mod retry;
 mod segmented;
 mod single;
+mod verification;
 
-use rget::features::download::DownloadOptions;
+use rget::features::download::{DownloadOptions, OnOccupied};
 use rget::shared::address::HostPolicy;
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -71,6 +73,8 @@ pub(crate) fn options() -> DownloadOptions {
         headers: Vec::new(),
         // The test server is on loopback.
         host_policy: HostPolicy::AllowPrivate,
+        verify: None,
+        on_occupied: OnOccupied::Replace,
     }
 }
 

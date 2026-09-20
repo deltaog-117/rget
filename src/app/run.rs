@@ -22,11 +22,13 @@ use super::cli::Args;
 use super::config::Config;
 use super::error::Result;
 use super::settings::Settings;
+use crate::features::destination::{Claims, ExistingFile, Placement, SkipReason};
+use crate::features::download::{Outcome, Relocate, Verifier};
 use crate::features::{destination, download, input, integrity, validation};
 use crate::shared::size::format_size;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use indicatif::MultiProgress;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -60,6 +62,11 @@ pub fn run() -> Result<()> {
     } else {
         Config::default()
     };
+    if let Some(message) = Settings::resume_conflict(&args) {
+        Args::command()
+            .error(clap::error::ErrorKind::ArgumentConflict, message)
+            .exit();
+    }
     let settings = Settings::resolve(&args, &config);
     let quiet = settings.quiet;
 
@@ -96,7 +103,11 @@ pub fn run() -> Result<()> {
     }
 
     // --- BUILD TASKS ---
+    // Names are settled one URL at a time, before any download starts, so parallel downloads
+    // can never pick the same file and the result does not depend on timing.
+    let claims = Arc::new(Mutex::new(Claims::new()));
     let mut tasks: Vec<(String, String)> = Vec::new();
+    let mut skipped: Vec<(String, String, SkipReason)> = Vec::new();
     for url_str in &urls {
         let url = validation::validate_url_with(url_str, settings.host_policy())?;
         let base_name = destination::file_name_for(&url, args.output.as_deref());
@@ -105,7 +116,14 @@ pub fn run() -> Result<()> {
             settings.directory_prefix.as_deref(),
             args.output.is_some(),
         )?;
-        tasks.push((url_str.clone(), output_path));
+        let placement = claims
+            .lock()
+            .expect("the name claims are only locked briefly and never poisoned")
+            .place(&output_path, settings.if_exists);
+        match placement {
+            Placement::Write(path) => tasks.push((url_str.clone(), path)),
+            Placement::Skip { path, reason } => skipped.push((url_str.clone(), path, reason)),
+        }
     }
 
     // --- VERBOSE OUTPUT ---
@@ -146,13 +164,70 @@ pub fn run() -> Result<()> {
         if settings.allow_private {
             eprintln!("🛡️  Private addresses: allowed (--allow-private)");
         }
+        match settings.if_exists {
+            ExistingFile::Overwrite => {}
+            ExistingFile::Skip => eprintln!("📄 Existing files: skipped"),
+            ExistingFile::Rename => eprintln!("📄 Existing files: kept, new download numbered"),
+        }
         if !args.no_config {
             eprintln!("⚙️  Config: ~/.config/rget/config.toml");
         }
     }
 
+    // --- SKIPPED (the file is already there) ---
+    let mut error_count = 0;
+    // `--sha256` only applies to a single URL, as before.
+    let digest = args.sha256.clone().filter(|_| urls.len() == 1);
+    for (url, path, reason) in &skipped {
+        if !quiet {
+            match reason {
+                SkipReason::Exists => eprintln!("⏭️  {} -> {} already exists, skipping", url, path),
+                SkipReason::EarlierUrl => eprintln!("⏭️  {} -> {} has the same file name as an earlier URL, skipping", url, path),
+                SkipReason::NoFreeName => eprintln!("⏭️  {} -> no free file name for {}, skipping", url, path),
+            }
+        }
+        // An existing file that was kept can still be checked against the digest.
+        if let (SkipReason::Exists, Some(digest)) = (reason, &digest) {
+            if !quiet {
+                eprintln!("🔐 Verifying SHA‑256 checksum of the existing file...");
+            }
+            match integrity::verify_file(path, digest) {
+                Ok(()) if !quiet => eprintln!("✅ SHA‑256 checksum verified"),
+                Ok(()) => {}
+                Err(e) => {
+                    eprintln!("❌ {} -> Verification failed: {}", path, e);
+                    error_count += 1;
+                }
+            }
+        }
+    }
+
     // --- DOWNLOAD ---
-    let options = Arc::new(settings.download_options());
+    let mut download_options = settings.download_options();
+    // The digest is checked on the finished file *before* it is put in place, so a bad
+    // download replaces nothing.
+    download_options.verify = digest.map(|digest| {
+        Verifier::new(move |path| {
+            if !quiet {
+                eprintln!("🔐 Verifying SHA‑256 checksum...");
+            }
+            integrity::verify_file(path, &digest).map_err(|e| e.to_string())?;
+            if !quiet {
+                eprintln!("✅ SHA‑256 checksum verified");
+            }
+            Ok(())
+        })
+    });
+    download_options.on_occupied = match settings.if_exists {
+        ExistingFile::Overwrite => download::OnOccupied::Replace,
+        ExistingFile::Skip => download::OnOccupied::Skip,
+        ExistingFile::Rename => {
+            let claims = Arc::clone(&claims);
+            let relocate: Relocate = Arc::new(move |occupied| claims.lock().ok()?.relocate(occupied));
+            download::OnOccupied::Relocate(relocate)
+        }
+    };
+    let options = Arc::new(download_options);
 
     let multi_progress = if settings.jobs > 1 {
         Some(MultiProgress::new())
@@ -160,15 +235,16 @@ pub fn run() -> Result<()> {
         None
     };
 
-    // Path of the only download, kept for checksum verification below.
-    let single_output_path = tasks.first().map(|(_, output)| output.clone());
-
-    let mut error_count = 0;
-    download::run_pool(tasks, settings.jobs, options, multi_progress, |url, output, result| {
+    download::run_pool(tasks, settings.jobs, options, multi_progress, |url, _requested, result| {
         match result {
-            Ok(()) => {
+            Ok(Outcome::Saved(path)) => {
                 if !quiet {
-                    eprintln!("✅ {} -> {}", url, output);
+                    eprintln!("✅ {} -> {}", url, path);
+                }
+            }
+            Ok(Outcome::Skipped(path)) => {
+                if !quiet {
+                    eprintln!("⏭️  {} -> {} already exists, skipped", url, path);
                 }
             }
             Err(e) => {
@@ -177,19 +253,6 @@ pub fn run() -> Result<()> {
             }
         }
     });
-
-    // --- CHECKSUM VERIFICATION (single URL only) ---
-    if let Some(expected) = args.sha256 {
-        if let (1, Some(output_path)) = (urls.len(), single_output_path) {
-            if !quiet {
-                eprintln!("🔐 Verifying SHA‑256 checksum...");
-            }
-            integrity::verify_sha256(&output_path, &expected)?;
-            if !quiet {
-                eprintln!("✅ SHA‑256 checksum verified");
-            }
-        }
-    }
 
     if error_count > 0 {
         std::process::exit(1);

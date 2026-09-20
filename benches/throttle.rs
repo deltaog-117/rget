@@ -24,7 +24,7 @@
 //! and treat a slowdown above 5% in `unthrottled` as a failure.
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
-use rget::features::download::{download_file, DownloadOptions};
+use rget::features::download::{download_file, DownloadOptions, OnOccupied};
 use rget::shared::address::HostPolicy;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -68,6 +68,8 @@ fn options(limit_rate: Option<usize>) -> DownloadOptions {
         segments: 1,
         headers: Vec::new(),
         host_policy: HostPolicy::AllowPrivate, // the benchmark server is on loopback
+        verify: None,
+        on_occupied: OnOccupied::Replace,
     }
 }
 

@@ -35,7 +35,8 @@ Whether you're a developer downloading dependencies, a sysadmin fetching logs, o
 - 🛡️ **Safe partial files** — data is written to `name.part` and renamed only when complete, so a failed download never damages an existing file
 - 📂 **Default Downloads folder** — Files automatically save to `~/Downloads`
 - ⚙️ **Configuration file** — Set defaults in `~/.config/rget/config.toml`
-- 🔐 **SHA‑256 checksum verification** — Verify file integrity
+- 🔐 **SHA‑256 checksum verification** (`--sha256`) — The finished file is checked *before* it is put in place, so a download that does not match replaces nothing and leaves nothing behind
+- 📄 **Existing files** (`--if-exists`, `-n`) — Overwrite (the default), skip, or keep both by numbering the new one: `file (1).zip`
 - 🚦 **Rate limiting** (`--limit-rate`) — Control bandwidth usage
 - 📋 **Custom headers** (`-H`) — Add authentication tokens, etc.
 - 🧹 **Quiet mode** (`-q`) — Suppress all non‑error output
@@ -154,8 +155,16 @@ Only failures that can heal are retried (timeouts, dropped connections, and HTTP
 
 ### Verify SHA‑256 checksum
 ```bash
-rget --sha256 abc123def... https://example.com/file.zip
+rget --sha256 6e39426dd10db18f88f5c6b6be808b8d9f12929cd03b6ac41dba112de33ef099 https://example.com/file.zip
 ```
+The digest may be in either case, and a whole line of `sha256sum` output can be pasted. A digest that is not 64 hexadecimal digits is refused before anything is downloaded. The file is verified while still named `file.zip.part`; if it does not match, it is deleted and nothing is put in place, so an existing `file.zip` is never replaced by a bad download. (`--sha256` applies to a single URL.)
+
+### Don't overwrite an existing file
+```bash
+rget -n https://example.com/file.zip                        # skip it if file.zip exists
+rget --if-exists rename https://example.com/file.zip        # keep both: file (1).zip, file (2).zip, ...
+```
+By default an existing file is replaced, as before. With `--if-exists rename` a compound extension stays intact (`archive (1).tar.gz`), and a name whose download is in progress is never taken. If two URLs in the same command map to the same file name, the later one is always numbered (or skipped with `-n`), so neither download is lost. The check is made again at the moment the file is put in place: a file that appears while the download is running is never overwritten. `-c` (resume) continues an existing file and cannot be combined with `-n` or `--if-exists skip|rename`.
 
 ### Quiet mode (no output except errors)
 ```bash
@@ -193,6 +202,7 @@ limit_rate = 1048576      # 1 MB/s rate limit
 segments = 1              # Number of parallel segments for a single file
 # directory_prefix = "/path/to/downloads"  # Default output directory
 # allow_private = false   # Allow loopback, private and link-local addresses
+# if_exists = "overwrite" # When the file exists: "overwrite", "skip" or "rename"
 ```
 
 **CLI arguments override config values.**

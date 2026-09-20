@@ -21,6 +21,7 @@
 use super::download_file;
 use super::error::Result;
 use super::options::DownloadOptions;
+use super::outcome::Outcome;
 use crossbeam_channel::unbounded;
 use indicatif::MultiProgress;
 use std::sync::Arc;
@@ -39,11 +40,11 @@ pub fn run_pool<F>(
     multi_progress: Option<MultiProgress>,
     mut on_result: F,
 ) where
-    F: FnMut(String, String, Result<()>),
+    F: FnMut(String, String, Result<Outcome>),
 {
     let total = tasks.len();
     let (task_sender, task_receiver) = unbounded::<(String, String)>();
-    let (result_sender, result_receiver) = unbounded::<(String, String, Result<()>)>();
+    let (result_sender, result_receiver) = unbounded::<(String, String, Result<Outcome>)>();
 
     let mut handles = Vec::new();
     for _ in 0..jobs {

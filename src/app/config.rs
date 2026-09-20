@@ -18,6 +18,7 @@
 
 //! On-disk configuration (`~/.config/rget/config.toml`).
 
+use super::cli::IfExists;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -35,6 +36,7 @@ pub struct Config {
     pub segments: Option<usize>,
     pub directory_prefix: Option<String>,
     pub allow_private: Option<bool>,
+    pub if_exists: Option<IfExists>,
 }
 
 impl Config {
@@ -91,6 +93,7 @@ limit_rate = 1048576  # 1 MB/s
 segments = 1          # Number of parallel segments for a single file
 # directory_prefix = "/path/to/downloads"
 # allow_private = false   # set to true to allow loopback, private and link-local addresses
+# if_exists = "overwrite" # when the file exists: "overwrite", "skip" or "rename"
 "#;
             fs::write(&path, default_config)?;
         }

@@ -27,4 +27,7 @@ pub enum Error {
 
     #[error("Checksum mismatch: expected {expected}, got {actual}")]
     ChecksumMismatch { expected: String, actual: String },
+
+    #[error("Invalid SHA-256 digest '{0}': expected 64 hexadecimal digits")]
+    InvalidDigest(String),
 }

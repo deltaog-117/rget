@@ -22,6 +22,8 @@
 | 2026-09-20 | URL validation | Judge the parsed URL: hostname, `..` segments, secret-file segments | ✅ Confirmed |
 | 2026-09-20 | Host policy (SSRF) and `--allow-private` | Classify addresses; guard redirects; filter DNS answers | ✅ Confirmed |
 | 2026-09-20 | Names taken from URLs | Decode, then sanitize; defer `Content-Disposition` | ✅ Confirmed |
+| 2026-09-20 | Existing files (no-clobber) | `--if-exists overwrite\|skip\|rename`, default unchanged | ✅ Confirmed |
+| 2026-09-20 | Verifying a checksum | Verify before putting in place, via a hook; delete on mismatch | ✅ Confirmed |
 
 ---
 
@@ -987,6 +989,165 @@ The output name came straight from the last path segment of the URL, still perce
 #### References
 
 - `ROADMAP.md`, item C3
+
+---
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-09-20 | Initial entry | deltaog-117 |
+
+---
+
+### Existing Files: `--if-exists`
+
+**Date:** 2026-09-20
+**Status:** Confirmed
+
+---
+
+#### Context / Background
+
+Probing the tool showed three things. A download over an existing, hand-edited file replaced it without a word. Two URLs that map to the same file name (`/x/file.bin`, `/y/file.bin`) silently lost one download: with `-j 1` the second replaced the first, and with `-j 2` the winner was random, with both reporting success. And since Cycle 2 the file is put in place by a rename at the very end, so any "don't clobber" rule has to hold at that moment, not at the start.
+
+---
+
+#### Options Considered
+
+**Option A: `--if-exists overwrite|skip|rename`, default unchanged**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Explicit and discoverable <br> • No silent change for existing scripts <br> • `-n/--no-clobber` is wget muscle memory |
+| **Disadvantages** | • The default stays "overwrite", as `curl -O` does |
+| **Implementation Difficulty** | Medium |
+| **Fit with Constraints** | Best |
+
+**Option B: Make `rename` the default**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Safe by default, in keeping with the rest of the tool |
+| **Disadvantages** | • **Breaking**: a script that re-runs `rget url` to refresh a file would start producing `file (1).zip`, which deserves a major version |
+| **Implementation Difficulty** | Medium |
+| **Fit with Constraints** | A product decision, not a bug fix |
+
+**Option C: Only `--no-clobber`**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Smallest |
+| **Disadvantages** | • No way to keep both copies |
+| **Implementation Difficulty** | Easy |
+| **Fit with Constraints** | Too little |
+
+---
+
+#### Decision & Rationale
+
+**Chosen Option:** A.
+
+**Rules:**
+- **Numbering:** `file (1).zip`, `file (2).zip`, and `archive (1).tar.gz`. A candidate is taken if its final path, its `.part` file or its sidecar exists, so someone else's partial download is never trampled. Only `.tar.<ext>` counts as a compound extension: my first rule accepted any short middle segment and would have numbered `my.file.v2.zip` as `my.file (1).v2.zip`; a unit test caught it.
+- **Which paths:** the policy applies to whatever will be written, `-O` included. A device or FIFO (`-O /dev/null`) is never "in the way".
+- **`skip`:** prints `already exists, skipping`, counts as success, and if `--sha256` is given the existing file is verified.
+- **Duplicates within a run:** names are claimed one URL at a time *before* any download starts (a `Claims` set), so `-j` cannot make two downloads pick the same name and the result is deterministic. A later duplicate is numbered under every policy (skipped under `skip`), because overwriting a file fetched moments ago in the same command is never what was meant.
+- **`-c`:** resume continues an existing file, which `skip` and `rename` would refuse to touch, so they cannot be combined on the command line. An explicit `-n` wins over `resume = true` in the config file; a `skip` or `rename` default in the config file does not apply to a run that resumes.
+- **Atomic at the last step:** under `skip` and `rename` the finished file is claimed with a hard link, which fails if the name exists. On failure `rename` asks the caller for the next free name and `skip` discards the download, so a file that appears while the download runs is never overwritten. A test creates the file a second into a three-second transfer and checks both policies. Overwrite still overwrites.
+- **Layering:** `download` cannot import `destination`, so the last-moment decision is injected as an `OnOccupied` policy (`Replace`, `Skip`, or `Relocate` with a callback the app builds from the `Claims`). `download_file` now returns an `Outcome` saying where the file actually went.
+
+**Trade-offs and limits accepted:**
+- The default is still "overwrite". Changing it is a semver-major decision (option B), not made here.
+- On a filesystem without hard links the last step falls back to a check followed by a rename, which leaves a small window.
+- Numbering respects an in-progress single-connection download (`name.part`) but does not look for segment files (`name.part0` …). Recorded as roadmap item D15.
+
+---
+
+#### References
+
+- `ROADMAP.md`, item C4
+
+---
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-09-20 | Initial entry | deltaog-117 |
+
+---
+
+### Verifying a Checksum
+
+**Date:** 2026-09-20
+**Status:** Confirmed
+
+---
+
+#### Context / Background
+
+`--sha256` was checked after the download had already been renamed into place. Probing it showed the consequences: a well-formed but wrong digest replaced an existing good file and then *stayed*, with an error printed afterwards; an upper-case digest was reported as a mismatch (a `known_defect_*` test); and a malformed digest such as `deadbeef` was only noticed after the whole file had downloaded.
+
+---
+
+#### Options Considered
+
+**Option A: Verify before putting in place, through a hook**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • A bad download never replaces anything <br> • The check and the no-replace claim are one step <br> • `download` stays generic: the app hands it a callback built from `integrity` |
+| **Disadvantages** | • A small new callback type |
+| **Implementation Difficulty** | Medium |
+| **Fit with Constraints** | Best |
+
+**Option B: Keep verifying after the rename**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Smallest |
+| **Disadvantages** | • The good file is already gone by the time we find out |
+| **Implementation Difficulty** | Easy |
+| **Fit with Constraints** | Poor |
+
+**Option C: Hash while streaming**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • One fewer read |
+| **Disadvantages** | • Only works for plain single-connection downloads; resume and segments still need a read pass |
+| **Implementation Difficulty** | Hard |
+| **Fit with Constraints** | Poor for the saving |
+
+---
+
+#### Decision & Rationale
+
+**Chosen Option:** A. A mismatch **deletes** the download (the alternative was moving it aside as `name.corrupt`).
+
+**How it works:**
+- **`Sha256Digest`** is a value type (`try_new`, per `2engineering.md` pillar 1) holding 32 bytes. It accepts either case and only the first whitespace-separated word, so a whole `sha256sum` line can be pasted; anything that is not exactly 64 hexadecimal digits is refused. Clap parses `--sha256` with it, so a bad digest is a usage error (exit 2) before any request.
+- **The hook:** `download` accepts an optional `Verifier` (a callback `&Path -> Result<(), String>`). It runs on the staged `name.part` after the merge (for segmented downloads) and before the rename. A refusal deletes the partial data and its sidecar and returns `Error::Verification`, which is never retried. The app builds the verifier from `integrity::verify_file`.
+- **Deleting rather than keeping** matters: if the corrupt `.part` were left behind, a later `-c` would find it complete (the server answers 416 for a full-length range) and put it in place as if it were good.
+- **Resume paths:** a complete `.part` left by a killed run is verified before it is accepted, and deleted on failure. A complete existing *final* file that fails verification is reported but never deleted, because this run did not produce it.
+- A device or FIFO target cannot be read back, so it is not verified.
+
+**Things caught along the way:**
+- Three of my own test digests were wrong: an old test used `deadbeef` as a "wrong digest", which is now correctly a malformed one; one end-to-end case used a full digest whose tail I had typed from memory (only the first 16 characters had ever been shown), so I compute it from the same deterministic data instead.
+- One mutation I wrote to prove the case-insensitivity tests was too clever to compile, so it tested nothing; I replaced it with a simple one (reject upper-case hex), and four tests then failed as they should.
+- The end-to-end comparison: 140 cases, 24 changed (all intended, none unexplained), 115 identical.
+
+**Trade-offs accepted:**
+- A checksum mismatch is not retried: retrying would help a corrupted transfer but waste bandwidth on a wrong digest, and the two cannot be told apart.
+- `--sha256` still applies to a single URL (roadmap D14 sketches a checksum file for a batch).
+- The delete-on-mismatch choice means a mistyped but well-formed digest costs a re-download.
+
+---
+
+#### References
+
+- `$SUITE/2engineering.md` (pillars 1 and 2), `ROADMAP.md`, item C6
 
 ---
 

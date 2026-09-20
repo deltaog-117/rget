@@ -39,7 +39,8 @@ pub(super) fn is_retryable(error: &Error) -> bool {
         | Error::RedirectDisabled(..)
         | Error::ProtocolError(_)
         | Error::RangesUnsupported(_)
-        | Error::BlockedAddress(_) => false,
+        | Error::BlockedAddress(_)
+        | Error::Verification(_) => false,
     }
 }
 
@@ -77,9 +78,9 @@ fn next_delay(attempt: u32, jitter_ms: u64, retry_after: Option<Duration>) -> Op
 /// Runs `attempt_fn` (given the zero-based attempt number) until it succeeds, fails with
 /// an error that is not worth retrying, or `retries + 1` attempts have failed. `label`
 /// prefixes every message, so concurrent segments can be told apart.
-pub(super) fn run<F>(retries: u32, quiet: bool, label: &str, mut attempt_fn: F) -> Result<()>
+pub(super) fn run<T, F>(retries: u32, quiet: bool, label: &str, mut attempt_fn: F) -> Result<T>
 where
-    F: FnMut(usize) -> Result<()>,
+    F: FnMut(usize) -> Result<T>,
 {
     let max_attempts = retries.saturating_add(1);
     let mut attempt: u32 = 0;
@@ -89,7 +90,7 @@ where
         attempt += 1;
 
         let e = match attempt_fn(index) {
-            Ok(()) => return Ok(()),
+            Ok(done) => return Ok(done),
             Err(e) => e,
         };
 
@@ -162,6 +163,7 @@ mod tests {
         assert!(!is_retryable(&Error::ProtocolError("bad".into())));
         assert!(!is_retryable(&Error::RangesUnsupported("200".into())));
         assert!(!is_retryable(&Error::BlockedAddress("127.0.0.1".into())));
+        assert!(!is_retryable(&Error::Verification("bad digest".into())));
     }
 
     #[test]
@@ -256,7 +258,7 @@ mod tests {
     #[test]
     fn zero_retries_means_a_single_attempt() {
         let mut calls = 0;
-        let result = run(0, true, "", |_| {
+        let result = run::<(), _>(0, true, "", |_| {
             calls += 1;
             Err(Error::Stalled(1))
         });
@@ -267,7 +269,7 @@ mod tests {
     #[test]
     fn a_permanent_error_is_not_retried_even_when_retries_remain() {
         let mut calls = 0;
-        let result = run(5, true, "", |_| {
+        let result = run::<(), _>(5, true, "", |_| {
             calls += 1;
             Err(status(404))
         });

@@ -19,6 +19,9 @@
 //! Where a download lives while it is in progress: `name.part` plus a small sidecar,
 //! renamed into place only when the transfer is complete.
 
+use super::error::Error;
+use super::options::{OnOccupied, Verifier};
+use super::outcome::Outcome;
 use reqwest::header::{HeaderMap, ETAG, LAST_MODIFIED};
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
@@ -109,17 +112,107 @@ impl Target {
         let _ = fs::remove_file(&self.meta_path);
     }
 
-    /// Puts the finished download in place and removes the sidecar.
+    /// Runs `verify` on the finished download. A refusal deletes the partial data and sidecar,
+    /// so nothing is put in place and a later `-c` cannot mistake corrupt data for a complete
+    /// file. Not applied to a device or FIFO target, which cannot be read back.
     ///
     /// # Errors
     ///
-    /// Returns the I/O error if the rename fails.
-    pub(super) fn finish(&self) -> io::Result<()> {
-        if self.staged && self.part_path.exists() {
-            fs::rename(&self.part_path, &self.final_path)?;
+    /// [`Error::Verification`] with the reason the verifier gave.
+    pub(super) fn verify(&self, verify: Option<&Verifier>) -> Result<(), Error> {
+        let Some(verifier) = verify.filter(|_| self.staged) else {
+            return Ok(());
+        };
+        let path = if self.part_path.exists() { &self.part_path } else { &self.final_path };
+        verifier.check(path).map_err(|reason| {
+            // Only ever delete what this download produced, never a pre-existing file.
+            if path == &self.part_path {
+                self.discard_partial();
+            }
+            Error::Verification(reason)
+        })
+    }
+
+    /// Puts the finished download in place and removes the sidecar.
+    ///
+    /// With [`OnOccupied::Replace`] this is a rename over whatever is there. Otherwise the
+    /// name is claimed atomically (a hard link fails if the name exists), so a file that
+    /// appeared while downloading is never overwritten: it is either kept and the download
+    /// discarded, or the download is saved under the alternative name the caller picks.
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error if the file cannot be put in place.
+    pub(super) fn finish(&self, on_occupied: &OnOccupied) -> io::Result<Finished> {
+        if !self.staged || !self.part_path.exists() {
+            // Nothing staged: the file is already where it belongs.
+            let _ = fs::remove_file(&self.meta_path);
+            return Ok(Finished::Placed(self.final_path.clone()));
         }
+        let finished = match on_occupied {
+            OnOccupied::Replace => {
+                fs::rename(&self.part_path, &self.final_path)?;
+                Finished::Placed(self.final_path.clone())
+            }
+            _ => self.place_without_replacing(on_occupied)?,
+        };
         let _ = fs::remove_file(&self.meta_path);
-        Ok(())
+        Ok(finished)
+    }
+
+    fn place_without_replacing(&self, on_occupied: &OnOccupied) -> io::Result<Finished> {
+        let mut target = self.final_path.clone();
+        loop {
+            match link_without_replacing(&self.part_path, &target) {
+                Ok(()) => {
+                    let _ = fs::remove_file(&self.part_path);
+                    return Ok(Finished::Placed(target));
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                    let alternative = match on_occupied {
+                        OnOccupied::Relocate(pick) => pick(&target.to_string_lossy()),
+                        _ => None,
+                    };
+                    match alternative {
+                        Some(next) => target = PathBuf::from(next),
+                        None => {
+                            self.discard_partial();
+                            return Ok(Finished::Skipped(target));
+                        }
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
+
+/// Where a finished download was put.
+#[derive(Debug, PartialEq)]
+pub(super) enum Finished {
+    Placed(PathBuf),
+    /// The target was occupied and the policy declined to replace it; the download is gone.
+    Skipped(PathBuf),
+}
+
+impl Finished {
+    pub(super) fn into_outcome(self) -> Outcome {
+        match self {
+            Finished::Placed(path) => Outcome::Saved(path.to_string_lossy().to_string()),
+            Finished::Skipped(path) => Outcome::Skipped(path.to_string_lossy().to_string()),
+        }
+    }
+}
+
+/// Gives `from` the name `to`, failing with `AlreadyExists` if `to` exists. A hard link is
+/// atomic in that respect; on a filesystem without hard links this falls back to a check
+/// followed by a rename, which leaves a small window.
+fn link_without_replacing(from: &Path, to: &Path) -> io::Result<()> {
+    match fs::hard_link(from, to) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(e),
+        Err(_) if fs::symlink_metadata(to).is_ok() => Err(io::Error::from(io::ErrorKind::AlreadyExists)),
+        Err(_) => fs::rename(from, to),
     }
 }
 
@@ -213,7 +306,7 @@ mod tests {
 
         let t = Target::resolve(link.to_str().unwrap());
         fs::write(t.work_path(), b"new").unwrap();
-        t.finish().unwrap();
+        t.finish(&OnOccupied::Replace).unwrap();
 
         assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
         assert_eq!(fs::read(&real).unwrap(), b"new");
@@ -235,7 +328,7 @@ mod tests {
         let t = Target::resolve(out.to_str().unwrap());
         fs::write(t.work_path(), b"data").unwrap();
         fs::write(t.meta_path(), b"url = \"x\"").unwrap();
-        t.finish().unwrap();
+        t.finish(&OnOccupied::Replace).unwrap();
         assert_eq!(fs::read(&out).unwrap(), b"data");
         assert!(!t.work_path().exists());
         assert!(!t.meta_path().exists());
@@ -250,7 +343,7 @@ mod tests {
         let t = Target::resolve(out.to_str().unwrap());
         fs::write(t.work_path(), b"new").unwrap();
         assert_eq!(fs::read(&out).unwrap(), b"old");
-        t.finish().unwrap();
+        t.finish(&OnOccupied::Replace).unwrap();
         assert_eq!(fs::read(&out).unwrap(), b"new");
         fs::remove_dir_all(dir).unwrap();
     }

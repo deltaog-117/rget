@@ -44,6 +44,11 @@ pub enum Error {
     #[error("Timed out: no data received for {0}s")]
     Stalled(u64),
 
+    /// The finished download was refused by the caller's [`Verifier`](super::Verifier) and
+    /// discarded.
+    #[error("Verification failed: {0}")]
+    Verification(String),
+
     /// A redirect or a DNS answer led to a local or private address, and the host policy
     /// forbids contacting those.
     #[error("Blocked: {0}")]

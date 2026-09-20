@@ -18,8 +18,38 @@
 
 //! Command-line interface definition.
 
+use crate::features::destination::ExistingFile;
+use crate::features::integrity::Sha256Digest;
 use crate::shared::size::parse_size;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+use serde::{Deserialize, Serialize};
+
+/// Parses `--sha256` at the command line, so a malformed digest is refused before any download.
+fn parse_digest(text: &str) -> Result<Sha256Digest, String> {
+    Sha256Digest::parse(text).map_err(|e| e.to_string())
+}
+
+/// What to do when the file to be written already exists (`--if-exists`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IfExists {
+    /// Replace it (the default)
+    Overwrite,
+    /// Leave it alone and do not download
+    Skip,
+    /// Keep it and save the new download as `name (1).ext`, `name (2).ext`, ...
+    Rename,
+}
+
+impl From<IfExists> for ExistingFile {
+    fn from(choice: IfExists) -> Self {
+        match choice {
+            IfExists::Overwrite => ExistingFile::Overwrite,
+            IfExists::Skip => ExistingFile::Skip,
+            IfExists::Rename => ExistingFile::Rename,
+        }
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "rget")]
@@ -65,9 +95,10 @@ pub struct Args {
     #[arg(short = 'q', long)]
     pub quiet: bool,
 
-    /// SHA‑256 checksum to verify (only with single URL)
-    #[arg(long)]
-    pub sha256: Option<String>,
+    /// SHA‑256 checksum the download must match (only with a single URL). Either case; a whole
+    /// `sha256sum` line may be pasted. A mismatch discards the download and replaces nothing
+    #[arg(long, value_parser = parse_digest)]
+    pub sha256: Option<Sha256Digest>,
 
     /// Number of parallel downloads (default: 1)
     #[arg(short = 'j', long)]
@@ -92,6 +123,14 @@ pub struct Args {
     /// Allow downloads from loopback, private and link-local addresses (blocked by default)
     #[arg(long)]
     pub allow_private: bool,
+
+    /// What to do when the file already exists (default: overwrite). Not combinable with -c
+    #[arg(long, value_enum)]
+    pub if_exists: Option<IfExists>,
+
+    /// Do not download a file that already exists (same as --if-exists skip)
+    #[arg(short = 'n', long, conflicts_with = "if_exists")]
+    pub no_clobber: bool,
 
     /// Ignore config file
     #[arg(long)]

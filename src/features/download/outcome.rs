@@ -16,12 +16,23 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-//! Integrity: did we get the right bytes?
+//! What became of a download.
 
-mod digest;
-mod error;
-mod sha256;
+/// Where a finished download ended up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    /// The file is at this path. It differs from the requested path when the requested one was
+    /// taken and the policy asked for a numbered alternative.
+    Saved(String),
+    /// The download was discarded because a file was already at this path.
+    Skipped(String),
+}
 
-pub use digest::Sha256Digest;
-pub use error::Error;
-pub use sha256::{compute_sha256, digest_of_file, verify_file, verify_sha256};
+impl Outcome {
+    /// The path the outcome is about.
+    pub fn path(&self) -> &str {
+        match self {
+            Outcome::Saved(path) | Outcome::Skipped(path) => path,
+        }
+    }
+}

@@ -84,14 +84,25 @@ fn cut(text: &str, max: usize) -> &str {
     &text[..end]
 }
 
-/// Where the extension of a long `name` starts: the last dot, or the one before it when that
-/// gives a short compound extension such as `.tar.gz`. `None` when there is nothing to keep.
+/// Splits a file name into its stem and its (short, possibly compound) extension:
+/// `archive.tar.gz` becomes `("archive", ".tar.gz")` and `README` becomes `("README", "")`.
+pub(super) fn split_extension(name: &str) -> (&str, &str) {
+    match extension_start(name) {
+        Some(dot) => name.split_at(dot),
+        None => (name, ""),
+    }
+}
+
+/// Where the extension of `name` starts: the last dot, or the one before it for a `.tar.<ext>`
+/// archive (`.tar.gz`, `.tar.xz`, …). Only `.tar` counts as a compound prefix, so
+/// `my.file.v2.zip` has the extension `.zip` and `version.1.2.zip` too. `None` when there is no
+/// short extension to speak of.
 fn extension_start(name: &str) -> Option<usize> {
     let last = name.rfind('.').filter(|&dot| dot > 0)?;
-    let compound = name[..last]
+    let tarball = name[..last]
         .rfind('.')
-        .filter(|&prev| prev > 0 && last - prev <= 5 && name.len() - prev <= MAX_KEPT_EXTENSION_BYTES);
-    let start = compound.unwrap_or(last);
+        .filter(|&prev| prev > 0 && name[prev + 1..last].eq_ignore_ascii_case("tar"));
+    let start = tarball.unwrap_or(last);
     (name.len() - start <= MAX_KEPT_EXTENSION_BYTES).then_some(start)
 }
 
@@ -155,6 +166,18 @@ mod tests {
         }
         // Not an extension worth keeping: a dot followed by a long tail.
         assert_eq!(name(".averylongsuffixthatisnotanextension").len(), MAX_NAME_BYTES);
+    }
+
+    #[test]
+    fn only_tar_makes_a_compound_extension() {
+        assert_eq!(split_extension("archive.tar.gz"), ("archive", ".tar.gz"));
+        assert_eq!(split_extension("archive.TAR.GZ"), ("archive", ".TAR.GZ"));
+        assert_eq!(split_extension("my.file.v2.zip"), ("my.file.v2", ".zip"));
+        assert_eq!(split_extension("version.1.2.zip"), ("version.1.2", ".zip"));
+        assert_eq!(split_extension("a.b.c.d"), ("a.b.c", ".d"));
+        assert_eq!(split_extension("README"), ("README", ""));
+        assert_eq!(split_extension(".hidden"), (".hidden", ""));
+        assert_eq!(split_extension("trailing."), ("trailing", "."));
     }
 
     #[test]

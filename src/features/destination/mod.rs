@@ -18,8 +18,10 @@
 
 //! Destination: where does the downloaded file go?
 
+mod conflict;
 mod filename;
 mod location;
 
+pub use conflict::{Claims, ExistingFile, Placement, SkipReason};
 pub use filename::file_name_for;
 pub use location::{default_download_dir, output_path};

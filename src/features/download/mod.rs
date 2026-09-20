@@ -24,6 +24,7 @@
 mod client;
 mod error;
 mod options;
+mod outcome;
 mod parts;
 mod partial;
 mod pool;
@@ -35,7 +36,8 @@ mod stream;
 mod throttle;
 
 pub use error::{Error, Result};
-pub use options::DownloadOptions;
+pub use options::{DownloadOptions, OnOccupied, Relocate, Verifier};
+pub use outcome::Outcome;
 pub use pool::run_pool;
 
 use indicatif::MultiProgress;
@@ -45,13 +47,14 @@ use indicatif::MultiProgress;
 ///
 /// # Errors
 ///
-/// Returns the last error once every attempt (`options.retries + 1`) has failed.
+/// Returns the last error once every attempt (`options.retries + 1`) has failed, or
+/// [`Error::Verification`] when `options.verify` refuses the finished file.
 pub fn download_file(
     url: &str,
     output_path: &str,
     options: &DownloadOptions,
     multi_progress: Option<&MultiProgress>,
-) -> Result<()> {
+) -> Result<Outcome> {
     if options.segments > 1 {
         return segmented::download(url, output_path, options, multi_progress);
     }
@@ -66,7 +69,7 @@ fn download_single(
     output_path: &str,
     options: &DownloadOptions,
     multi_progress: Option<&MultiProgress>,
-) -> Result<()> {
+) -> Result<Outcome> {
     retry::run(options.retries, options.quiet, "", |attempt| {
         single::attempt(url, output_path, options, attempt, multi_progress)
     })

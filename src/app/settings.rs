@@ -18,9 +18,10 @@
 
 //! Merges CLI arguments and the config file into one resolved set of settings.
 
-use super::cli::Args;
+use super::cli::{Args, IfExists};
 use super::config::Config;
-use crate::features::download::DownloadOptions;
+use crate::features::destination::ExistingFile;
+use crate::features::download::{DownloadOptions, OnOccupied};
 use crate::shared::address::HostPolicy;
 
 /// Effective settings: a CLI value wins over the config file, which wins over the default.
@@ -38,10 +39,36 @@ pub struct Settings {
     pub directory_prefix: Option<String>,
     pub headers: Vec<(String, String)>,
     pub allow_private: bool,
+    pub if_exists: ExistingFile,
+}
+
+/// The policy the user asked for on the command line, if any.
+fn cli_policy(args: &Args) -> Option<IfExists> {
+    if args.no_clobber { Some(IfExists::Skip) } else { args.if_exists }
+}
+
+fn keeps_existing(choice: Option<IfExists>) -> bool {
+    matches!(choice, Some(IfExists::Skip | IfExists::Rename))
 }
 
 impl Settings {
+    /// `-c` continues the existing file, which `skip` and `rename` would refuse to touch, so the
+    /// two cannot be asked for together on the command line.
+    pub fn resume_conflict(args: &Args) -> Option<&'static str> {
+        (args.resume && keeps_existing(cli_policy(args)))
+            .then_some("-c (resume) cannot be combined with --no-clobber or --if-exists skip/rename")
+    }
+
     pub fn resolve(args: &Args, config: &Config) -> Self {
+        let chosen = cli_policy(args);
+        // An explicit skip/rename on the command line wins over `resume = true` in the config
+        // file; a skip/rename in the config file does not apply to a run that resumes.
+        let resume = (args.resume || config.resume.unwrap_or(false)) && !keeps_existing(chosen);
+        let if_exists = match chosen.or(config.if_exists) {
+            Some(_) if resume && chosen.is_none() => ExistingFile::Overwrite,
+            Some(policy) => policy.into(),
+            None => ExistingFile::Overwrite,
+        };
         Self {
             timeout: args.timeout.unwrap_or_else(|| config.timeout.unwrap_or(30)),
             retries: args.retries.unwrap_or_else(|| config.retries.unwrap_or(0)),
@@ -51,7 +78,7 @@ impl Settings {
             follow_redirects: args
                 .follow_redirects
                 .unwrap_or_else(|| config.follow_redirects.unwrap_or(true)),
-            resume: args.resume || config.resume.unwrap_or(false),
+            resume,
             limit_rate: args.limit_rate.or(config.limit_rate),
             segments: if args.segments > 1 {
                 args.segments
@@ -65,6 +92,7 @@ impl Settings {
                 .cloned(),
             headers: parse_headers(&args.header),
             allow_private: args.allow_private || config.allow_private.unwrap_or(false),
+            if_exists,
         }
     }
 
@@ -73,7 +101,8 @@ impl Settings {
         if self.allow_private { HostPolicy::AllowPrivate } else { HostPolicy::BlockPrivate }
     }
 
-    /// The subset of settings the download feature cares about.
+    /// The subset of settings the download feature cares about. The verifier and the
+    /// conflict handling depend on the URLs and are added by the caller.
     pub fn download_options(&self) -> DownloadOptions {
         DownloadOptions {
             resume: self.resume,
@@ -86,6 +115,8 @@ impl Settings {
             segments: self.segments,
             headers: self.headers.clone(),
             host_policy: self.host_policy(),
+            verify: None,
+            on_occupied: OnOccupied::Replace,
         }
     }
 }

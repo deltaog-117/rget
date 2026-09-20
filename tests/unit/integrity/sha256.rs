@@ -58,9 +58,10 @@ fn matching_checksum_verifies() {
 #[test]
 fn mismatch_reports_both_digests() {
     let path = temp_file("bad", b"hello rget\n");
-    match verify_sha256(path.to_str().unwrap(), "deadbeef") {
+    let wrong = "0".repeat(64);
+    match verify_sha256(path.to_str().unwrap(), &wrong) {
         Err(Error::ChecksumMismatch { expected, actual }) => {
-            assert_eq!(expected, "deadbeef");
+            assert_eq!(expected, wrong);
             assert_eq!(actual, HELLO_SHA256);
         }
         other => panic!("expected ChecksumMismatch, got {other:?}"),
@@ -76,14 +77,43 @@ fn missing_file_is_an_io_error() {
     ));
 }
 
-// Characterization of 1.0.0; roadmap item C6 makes the comparison case-insensitive.
 #[test]
-fn known_defect_uppercase_expected_digest_is_a_mismatch() {
-    let path = temp_file("upper", b"hello rget\n");
-    let upper = HELLO_SHA256.to_uppercase();
-    assert!(matches!(
-        verify_sha256(path.to_str().unwrap(), &upper),
-        Err(Error::ChecksumMismatch { .. })
-    ));
+fn the_expected_digest_may_be_in_either_case() {
+    let path = temp_file("case", b"hello rget\n");
+    assert!(verify_sha256(path.to_str().unwrap(), &HELLO_SHA256.to_uppercase()).is_ok());
+    assert!(verify_sha256(path.to_str().unwrap(), HELLO_SHA256).is_ok());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn a_whole_line_of_sha256sum_output_is_accepted() {
+    let path = temp_file("line", b"hello rget\n");
+    let line = format!("{HELLO_SHA256}  hello.txt\n");
+    assert!(verify_sha256(path.to_str().unwrap(), &line).is_ok());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn a_malformed_expected_digest_is_refused_before_the_file_is_read() {
+    // The path does not exist: if the file were read first, this would be an I/O error.
+    for bad in ["", "deadbeef", &"g".repeat(64), &"a".repeat(63), &"a".repeat(65)] {
+        assert!(
+            matches!(verify_sha256("/definitely/not/here", bad), Err(Error::InvalidDigest(_))),
+            "{bad:?}"
+        );
+    }
+}
+
+#[test]
+fn a_mismatch_reports_both_digests_in_lower_case() {
+    let path = temp_file("lower", b"hello rget\n");
+    let wrong = "A".repeat(64);
+    match verify_sha256(path.to_str().unwrap(), &wrong) {
+        Err(Error::ChecksumMismatch { expected, actual }) => {
+            assert_eq!(expected, "a".repeat(64));
+            assert_eq!(actual, HELLO_SHA256);
+        }
+        other => panic!("expected ChecksumMismatch, got {other:?}"),
+    }
     std::fs::remove_file(path).unwrap();
 }

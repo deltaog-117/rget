@@ -22,6 +22,7 @@
 //! restructure cannot change it silently. Tests that record a known defect say so, and
 //! flip when the roadmap item that fixes it lands.
 
+mod app;
 mod destination;
 mod input;
 mod integrity;

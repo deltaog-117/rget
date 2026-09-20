@@ -21,7 +21,8 @@
 use super::client;
 use super::error::{Error, Result};
 use super::options::DownloadOptions;
-use super::partial::{PartMeta, Source, Target};
+use super::outcome::Outcome;
+use super::partial::{Finished, PartMeta, Source, Target};
 use super::resume::{self, Plan, Reply};
 use super::stream;
 use super::throttle::Throttle;
@@ -51,7 +52,7 @@ pub(super) fn attempt(
     options: &DownloadOptions,
     attempt_index: usize,
     multi_progress: Option<&MultiProgress>,
-) -> Result<()> {
+) -> Result<Outcome> {
     let target = Target::resolve(output_path);
     let resume_wanted = target.is_staged() && (options.resume || attempt_index > 0);
 
@@ -73,7 +74,7 @@ pub(super) fn attempt(
     fetch(&job, source.map(|(s, _)| s), saved_meta.as_ref(), plan)
 }
 
-fn fetch(job: &Job, source: Option<Source>, saved_meta: Option<&PartMeta>, plan: Plan) -> Result<()> {
+fn fetch(job: &Job, source: Option<Source>, saved_meta: Option<&PartMeta>, plan: Plan) -> Result<Outcome> {
     let options = job.options;
     let quiet = options.quiet;
     let started = Instant::now();
@@ -110,12 +111,13 @@ fn fetch(job: &Job, source: Option<Source>, saved_meta: Option<&PartMeta>, plan:
 
     match reply {
         Reply::AlreadyComplete => {
-            job.target.finish()?;
+            job.target.verify(options.verify.as_ref())?;
+            let finished = job.target.finish(&options.on_occupied)?;
             if !quiet {
                 eprintln!("File is already fully retrieved, nothing to download");
                 eprintln!("\n✅ Download complete: {}", job.output_path);
             }
-            return Ok(());
+            return Ok(finished.into_outcome());
         }
         Reply::Refetch => {
             // The partial data no longer matches the remote file; the 416 body is not the file.
@@ -196,15 +198,23 @@ fn fetch(job: &Job, source: Option<Source>, saved_meta: Option<&PartMeta>, plan:
     })?;
     log::debug!("{} bytes written to {} in {:?}", written, job.target.work_path().display(), started.elapsed());
 
-    job.target.finish()?;
+    // Checked before anything is put in place, so a bad download replaces nothing.
+    job.target.verify(options.verify.as_ref())?;
+    let finished = job.target.finish(&options.on_occupied)?;
 
     if let Some(p) = progress {
         p.finish();
     }
 
     if !quiet {
-        eprintln!("\n✅ Download complete: {}", job.output_path);
+        match &finished {
+            Finished::Placed(path) => eprintln!("\n✅ Download complete: {}", path.display()),
+            Finished::Skipped(path) => eprintln!(
+                "\nA file appeared at {} while downloading; keeping it and discarding this download",
+                path.display()
+            ),
+        }
     }
 
-    Ok(())
+    Ok(finished.into_outcome())
 }

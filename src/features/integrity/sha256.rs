@@ -18,31 +18,59 @@
 
 //! SHA-256 file verification.
 
+use super::digest::Sha256Digest;
 use super::error::Error;
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::Read;
+use std::path::Path;
 
-pub fn compute_sha256(file_path: &str) -> Result<String, std::io::Error> {
-    let mut file = File::open(file_path)?;
+/// The SHA-256 of the file at `path`, read in constant memory.
+///
+/// # Errors
+///
+/// Returns the I/O error if the file cannot be opened or read.
+pub fn digest_of_file(path: impl AsRef<Path>) -> Result<Sha256Digest, std::io::Error> {
+    let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
-    let mut buffer = [0; 8192];
+    let mut buffer = vec![0u8; 64 * 1024];
     loop {
         let n = file.read(&mut buffer)?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         hasher.update(&buffer[..n]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(Sha256Digest::from_bytes(hasher.finalize().into()))
 }
 
-pub fn verify_sha256(file_path: &str, expected: &str) -> Result<(), Error> {
-    let actual = compute_sha256(file_path)?;
-    if actual == expected {
+/// The SHA-256 of the file at `path` as lower-case hexadecimal.
+pub fn compute_sha256(file_path: &str) -> Result<String, std::io::Error> {
+    Ok(digest_of_file(file_path)?.to_hex())
+}
+
+/// Checks the file at `path` against `expected`.
+///
+/// # Errors
+///
+/// [`Error::ChecksumMismatch`] (naming both digests) or an I/O error.
+pub fn verify_file(path: impl AsRef<Path>, expected: &Sha256Digest) -> Result<(), Error> {
+    let actual = digest_of_file(path)?;
+    if &actual == expected {
         Ok(())
     } else {
         Err(Error::ChecksumMismatch {
-            expected: expected.to_string(),
-            actual,
+            expected: expected.to_hex(),
+            actual: actual.to_hex(),
         })
     }
+}
+
+/// Like [`verify_file`], taking the expected digest as text.
+///
+/// # Errors
+///
+/// [`Error::InvalidDigest`] when `expected` is not a SHA-256 digest, otherwise as [`verify_file`].
+pub fn verify_sha256(file_path: &str, expected: &str) -> Result<(), Error> {
+    verify_file(file_path, &Sha256Digest::parse(expected)?)
 }
