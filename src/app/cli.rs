@@ -45,7 +45,7 @@ pub struct Args {
     #[arg(short = 'v', long, action = clap::ArgAction::Count)]
     pub verbose: u8,
 
-    /// Timeout in seconds (default: 30)
+    /// Timeout in seconds: for connecting, and for each pause in the incoming data (default: 30)
     #[arg(short = 't', long)]
     pub timeout: Option<u64>,
 

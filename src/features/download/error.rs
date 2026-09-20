@@ -33,6 +33,12 @@ pub enum Error {
 
     #[error("Protocol error: {0}")]
     ProtocolError(String),
+
+    #[error("HTTP error: {0}")]
+    HttpStatus(reqwest::StatusCode),
+
+    #[error("Timed out: no data received for {0}s")]
+    Stalled(u64),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

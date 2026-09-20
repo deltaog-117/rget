@@ -29,6 +29,7 @@ mod resume;
 mod retry;
 mod segmented;
 mod single;
+mod stream;
 mod throttle;
 
 pub use error::{Error, Result};

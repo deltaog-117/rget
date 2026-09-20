@@ -18,12 +18,16 @@
 
 //! HTTP client construction and request decoration.
 
-use super::error::Result;
-use reqwest::blocking::{Client, RequestBuilder};
+use super::error::{Error, Result};
+use reqwest::blocking::{Client, RequestBuilder, Response};
 use reqwest::header::USER_AGENT;
 use std::time::Duration;
 
 /// Builds a blocking client with the given timeout and redirect policy.
+///
+/// `timeout` bounds connecting and receiving the response headers as a whole. While the
+/// body is read with `Read::read`, the same duration applies afresh to *each* read, so
+/// it acts as a stall limit and never caps the total transfer time.
 pub(super) fn build(timeout: u64, follow_redirects: bool) -> Result<Client> {
     let mut client_builder = Client::builder()
         .timeout(Duration::from_secs(timeout))
@@ -54,4 +58,15 @@ pub(super) fn apply_headers(
     }
 
     request_builder
+}
+
+/// Turns any non-2xx response into [`Error::HttpStatus`] so that an error page is never
+/// written to disk as if it were the file.
+pub(super) fn ensure_success(response: Response) -> Result<Response> {
+    let status = response.status();
+    if status.is_success() {
+        Ok(response)
+    } else {
+        Err(Error::HttpStatus(status))
+    }
 }

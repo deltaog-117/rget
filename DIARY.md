@@ -14,6 +14,8 @@
 | 2026-09-20 | Restructure strategy | One feature at a time, green build after each | ✅ Confirmed |
 | 2026-09-20 | Error types | Per-feature errors aggregated by `AppError` | ✅ Confirmed |
 | 2026-09-20 | Proving "no behaviour change" | 65-case end-to-end baseline diff plus characterization tests | ✅ Confirmed |
+| 2026-09-20 | Streaming the body and the meaning of `-t` | Explicit read loop; timeout becomes a stall limit | ✅ Confirmed |
+| 2026-09-20 | `--limit-rate` with `--segments` | Limit applies to the whole download | ✅ Confirmed |
 
 ---
 
@@ -310,3 +312,156 @@ A small Python HTTP server (with `Range`, `HEAD`, redirects, 404, a flaky endpoi
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-09-20 | Initial entry | deltaog-117 |
+
+---
+
+### Streaming the Body and the Meaning of `-t`
+
+**Date:** 2026-09-20
+**Status:** Confirmed
+
+---
+
+#### Context / Background
+
+`response.bytes()` buffered the whole file in memory before the first byte reached disk, and its timeout was one deadline for the entire body, so any download longer than `-t` (default 30s) failed. Error responses were also saved as the file because the status was never checked. The roadmap items were A1 (streaming), A2 (timeout) and A4 (status), plus B7 and B10 in the same code.
+
+---
+
+#### Options Considered
+
+**Option A: Explicit read loop with one reusable buffer, in a shared `stream` helper**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Smallest change <br> • Read errors and write errors stay distinguishable, which the retry work needs <br> • Generic over `Read`/`Write`, so it is property-testable without a network <br> • Reads can be capped at the rate limit |
+| **Disadvantages** | • A little more code than `io::copy` |
+| **Implementation Difficulty** | Easy–Medium |
+| **Fit with Constraints** | Best |
+
+**Option B: `std::io::copy` into a writer that throttles and reports progress**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Least code |
+| **Disadvantages** | • Read and write failures merge into one `io::Error`, so a network timeout cannot be told from a full disk <br> • Fixed 8 KiB buffer <br> • Throttling hidden inside `write()` |
+| **Implementation Difficulty** | Easy |
+| **Fit with Constraints** | Weak: it loses the error classification A6 needs |
+
+**Option C: Async internals (tokio and the async `reqwest` client with `read_timeout`)**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • A real `read_timeout` setting <br> • Cancellation on drop |
+| **Disadvantages** | • Rewrites `single`, `segmented`, `pool` and `client` <br> • Adds direct dependencies <br> • Buys nothing we lack (see below) |
+| **Implementation Difficulty** | Hard |
+| **Fit with Constraints** | Poor |
+
+---
+
+#### Decision & Rationale
+
+**Chosen Option:** A
+
+**Reasoning:**
+
+The blocking `reqwest` client has `timeout` and `connect_timeout` but no `read_timeout` (only the async client does), so a "connect plus stall timeout" looked like it needed extra machinery. A throwaway probe against a slow local server showed otherwise: `bytes()` applies one deadline to the whole body (a 4.2s body with `-t 2` failed at 2.0s), while `Read::read()` computes a fresh deadline on every call (the same body finished in 3.5s, and a server that went silent failed at 2.0s). Streaming therefore turns the existing `-t` into a stall limit with no new code. That removed the main argument for option C.
+
+**Results measured afterwards:** a 400 MiB download over loopback peaked at 437 MB of memory in 2.4s before and 24 MB in 0.7s after. The 73-case end-to-end comparison against the 1.0.0 binary changed only where intended: slow downloads succeed, error statuses are errors, header-guarded servers are segmented, and the DEBUG lines are gone.
+
+**Trade-offs accepted:**
+- `-t` no longer caps the total transfer time. A separate `--max-time` can be added if wanted.
+- A stalled reader is reported by `reqwest` as an `io::Error` wrapping a `reqwest::Error` with the misleading text "error decoding response body". The helper unwraps it into `Error::Stalled` ("no data received for Ns") or `Error::Network`.
+- Error statuses are a new `Error::HttpStatus`, checked before the output file is opened, so a 404 never replaces an existing file.
+- Interim gap: a transfer interrupted mid-stream now leaves the bytes received so far under the final name (before it left an empty file). Roadmap item C5 (`name.part`, then rename) closes it, together with A5.
+- A 416 on an already-complete file is now an error that leaves the file intact, instead of truncating it to 0 bytes and reporting success. A5 turns it into a success.
+
+---
+
+#### Implementation Notes
+
+- One 64 KiB buffer is allocated per download and reused; memory no longer depends on the file size.
+- The segmented probe now sends `-H` and the User-Agent and follows `--follow-redirects`; a non-2xx probe falls back to the single-connection path, which reports the real error.
+- `🔍 DEBUG:` prints became `log::debug!` (`RUST_LOG=debug`). `log` is a direct dependency now.
+- Benchmark: `benches/throttle.rs` (`criterion`), unthrottled versus a generous limit, over loopback to `/dev/null`. About 400–470 MiB/s, and the throttle bookkeeping is within noise. To gate on regressions, record `--save-baseline before` and fail on more than 5%.
+
+---
+
+#### References
+
+- `$SUITE/2engineering.md` (pillars 2, 3 and 5), `$SUITE/4iteration.md`
+- `ROADMAP.md`, items A1, A2, A4, B7, B10
+
+---
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-09-20 | Initial entry | deltaog-117 |
+
+---
+
+### `--limit-rate` with `--segments`
+
+**Date:** 2026-09-20
+**Status:** Confirmed
+
+---
+
+#### Context / Background
+
+Each segment thread ran its own throttle with the full limit, so `--limit-rate 2M --segments 4` allowed up to 8 MB/s. Before streaming, throttling only slowed disk writes and the effect was hidden; once the network read is throttled, the excess became visible.
+
+---
+
+#### Options Considered
+
+**Option A: Keep the limit per segment**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • No change |
+| **Disadvantages** | • The limit is not honoured; the real total is N times larger |
+| **Implementation Difficulty** | None |
+| **Fit with Constraints** | Poor |
+
+**Option B: Divide the limit by the number of segments**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Small and deterministic <br> • The total stays at or below the limit |
+| **Disadvantages** | • An idle or finished segment does not lend its share to the others <br> • Rounds down |
+| **Implementation Difficulty** | Easy |
+| **Fit with Constraints** | Good |
+
+**Option C: One shared token bucket across segments**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Exact total, with unused share redistributed |
+| **Disadvantages** | • Shared mutable state between threads, so a lock on the hot path <br> • Needs a concurrency model first (`2engineering.md` pillar 4) |
+| **Implementation Difficulty** | Medium–Hard |
+| **Fit with Constraints** | More than this needs |
+
+---
+
+#### Decision & Rationale
+
+**Chosen Option:** B
+
+**Reasoning:**
+
+It fixes the real problem with no new shared state. `0` (unlimited) stays unlimited, and no segment is ever divided down to zero (each gets at least 1 byte per second). A shared bucket can replace it later if uneven segments make the split visibly wasteful.
+
+**Trade-offs accepted:**
+- When one segment finishes early, the others stay at their share instead of speeding up.
+
+---
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-09-20 | Initial entry | deltaog-117 |
+

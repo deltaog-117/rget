@@ -167,7 +167,7 @@ Create `~/.config/rget/config.toml` with defaults:
 # rget configuration file
 # CLI arguments override these values
 
-timeout = 30              # Default timeout in seconds
+timeout = 30              # Connect timeout and longest pause in the data, in seconds
 retries = 0               # Number of retries on failure
 # user_agent = "rget/1.0" # Custom user-agent (uncomment to set)
 quiet = false             # Quiet mode (suppress progress bars)

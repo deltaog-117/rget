@@ -65,3 +65,23 @@ fn a_server_without_range_support_restarts_from_scratch() {
     assert_eq!(std::fs::read(&out).unwrap(), data);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+// Interim behaviour until roadmap item A5: a 416 on an already-complete file is now an
+// error that leaves the file alone (it used to truncate the file to 0 bytes and report
+// success). A5 turns this into a success.
+#[test]
+fn known_defect_resuming_a_complete_file_is_an_error_but_keeps_the_data() {
+    let data = payload(20_000);
+    let base = serve(data.clone(), true);
+    let dir = scratch_dir("resume-complete");
+    let out = dir.join("out.bin");
+    std::fs::write(&out, &data).unwrap();
+    let mut opts = options();
+    opts.resume = true;
+
+    let err = download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap_err();
+
+    assert!(matches!(err, rget::features::download::Error::HttpStatus(s) if s.as_u16() == 416));
+    assert_eq!(std::fs::read(&out).unwrap(), data);
+    std::fs::remove_dir_all(dir).unwrap();
+}

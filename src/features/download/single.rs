@@ -22,12 +22,13 @@ use super::client;
 use super::error::{Error, Result};
 use super::options::DownloadOptions;
 use super::resume;
+use super::stream;
 use super::throttle::Throttle;
 use crate::shared::progress::ProgressBarWrapper;
 use indicatif::MultiProgress;
 use reqwest::header::RANGE;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::time::Instant;
 
 /// Performs one download attempt (retries are the caller's concern).
 pub(super) fn attempt(
@@ -37,6 +38,7 @@ pub(super) fn attempt(
     multi_progress: Option<&MultiProgress>,
 ) -> Result<()> {
     let quiet = options.quiet;
+    let started = Instant::now();
     let client = client::build(options.timeout, options.follow_redirects)?;
 
     let existing_size = resume::existing_size(output_path, options.resume);
@@ -59,6 +61,10 @@ pub(super) fn attempt(
             .unwrap_or("unknown");
         return Err(Error::RedirectDisabled(status, location.to_string()));
     }
+
+    // Checked before the output file is opened, so an error page never replaces the file.
+    let mut response = client::ensure_success(response)?;
+    log::debug!("{} answered {}", url, response.status());
 
     if options.resume && existing_size > 0 {
         resume::handle_response(response.status(), existing_size, output_path, quiet)?;
@@ -90,18 +96,12 @@ pub(super) fn attempt(
     };
 
     let mut throttle = Throttle::new(options.limit_rate);
-    let chunk_size = 8192;
-
-    // FIXME(A1): buffers the whole body in memory before writing anything.
-    let bytes = response.bytes()?;
-    for chunk in bytes.chunks(chunk_size) {
-        throttle.wait(chunk.len());
-
-        file.write_all(chunk)?;
+    let written = stream::copy(&mut response, &mut file, &mut throttle, options.timeout, |n| {
         if let Some(ref p) = progress {
-            p.inc(chunk.len() as u64);
+            p.inc(n);
         }
-    }
+    })?;
+    log::debug!("{} bytes written to {} in {:?}", written, output_path, started.elapsed());
 
     if let Some(p) = progress {
         p.finish();

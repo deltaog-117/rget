@@ -17,7 +17,7 @@
 
 
 use super::{options, payload, scratch_dir, serve};
-use rget::features::download::download_file;
+use rget::features::download::{download_file, Error};
 
 fn leftover_parts(dir: &std::path::Path) -> Vec<String> {
     std::fs::read_dir(dir)
@@ -70,5 +70,67 @@ fn an_unreachable_server_falls_back_and_then_fails() {
     opts.segments = 3;
 
     assert!(download_file("http://127.0.0.1:1/file", out.to_str().unwrap(), &opts, None).is_err());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn the_probe_carries_the_custom_headers() {
+    let data = payload(120_000);
+    let base = serve(data.clone(), true);
+    let dir = scratch_dir("seg-guarded");
+    let out = dir.join("out.bin");
+    let mut opts = options();
+    opts.segments = 3;
+    opts.user_agent = Some("probe/1".to_string());
+    opts.headers = vec![("X-Token".to_string(), "ok".to_string())];
+
+    download_file(&format!("{base}/guarded"), out.to_str().unwrap(), &opts, None).unwrap();
+
+    assert_eq!(std::fs::read(&out).unwrap(), data);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_probe_without_the_headers_is_refused_and_reported() {
+    let base = serve(payload(120_000), true);
+    let dir = scratch_dir("seg-forbidden");
+    let out = dir.join("out.bin");
+    let mut opts = options();
+    opts.segments = 3;
+
+    let err = download_file(&format!("{base}/guarded"), out.to_str().unwrap(), &opts, None).unwrap_err();
+
+    assert!(matches!(err, Error::HttpStatus(s) if s.as_u16() == 403), "got {err:?}");
+    assert!(!out.exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn the_probe_respects_a_disabled_redirect_policy() {
+    let base = serve(payload(10_000), true);
+    let dir = scratch_dir("seg-noredirect");
+    let out = dir.join("out.bin");
+    let mut opts = options();
+    opts.segments = 3;
+    opts.follow_redirects = false;
+
+    let err = download_file(&format!("{base}/redirect"), out.to_str().unwrap(), &opts, None).unwrap_err();
+
+    assert!(matches!(err, Error::RedirectDisabled(302, _)), "got {err:?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn an_error_status_on_the_probe_is_reported_not_saved() {
+    let base = serve(payload(10), true);
+    let dir = scratch_dir("seg-404");
+    let out = dir.join("out.bin");
+    let mut opts = options();
+    opts.segments = 3;
+
+    let err = download_file(&format!("{base}/status/404"), out.to_str().unwrap(), &opts, None).unwrap_err();
+
+    assert!(matches!(err, Error::HttpStatus(s) if s.as_u16() == 404), "got {err:?}");
+    assert!(!out.exists());
     std::fs::remove_dir_all(dir).unwrap();
 }

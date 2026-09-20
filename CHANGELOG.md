@@ -11,12 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Library crate (`src/lib.rs`) alongside the binary, so the public API can be tested from `tests/`
 - Characterization test suite pinning the 1.0.0 behaviour: 16 in-file unit tests, 40 mirrored unit tests (`tests/unit/`), and 11 integration tests that run the real download code against an in-process HTTP server (`tests/integration/`)
 - `DownloadOptions` struct grouping the per-download settings
+- Debug tracing through the `log` crate: run with `RUST_LOG=debug` to see the probe result, segment ranges and per-part byte counts (replaces the always-on `🔍 DEBUG:` lines)
+- Property tests for the streaming helper (`proptest`) and a `criterion` throughput benchmark, `cargo bench`
+- Integration tests for slow and stalled servers, HTTP error statuses, header-guarded servers, and rate limiting
 
 ### Changed
 - Restructured the source tree from a flat `src/` into a feature-first layout: `app/` (CLI, config, settings merge, wiring), `features/{download,validation,integrity,input,destination}/`, and `shared/` (progress bar, size parsing). `main.rs` is now a thin entry point. No user-visible behaviour change; verified identical to 1.0.0 across 65 end-to-end cases.
 - `RgetError` split into per-feature error types (`download`, `validation`, `integrity`) aggregated by `AppError`; error messages and the `Error: …` output on failure are unchanged
 - The checksum step now verifies the path the download actually wrote to, instead of recomputing it
 - Removed clippy warnings from the carried-over code
+- `-t`/`--timeout` now limits connecting and each pause in the incoming data, instead of the whole transfer; there is no cap on total download time
+- `--limit-rate` combined with `--segments N` now applies to the download as a whole (each segment gets `1/N` of the limit) instead of giving every segment the full limit
+- The segmented `HEAD` probe now sends `-H` headers and the User-Agent and honours `--follow-redirects false`; a non-2xx probe falls back to the single-connection path, which reports the real error
+- Segmented downloads now take part in the `MultiProgress` display
+- Errors gained two variants, `HttpStatus` and `Stalled`, so callers (and the upcoming retry logic) can tell them from other network failures
+
+### Fixed
+- Downloads no longer buffer the whole file in memory: the body is streamed through a single 64 KiB buffer (a 400 MiB download peaked at 437 MB before and 24 MB now)
+- Downloads that take longer than the timeout (default 30s) no longer fail while data is still arriving
+- HTTP error responses (404, 500, …) are no longer saved as the output file and reported as complete; they fail with `HTTP error: <status>` and leave the destination untouched
+- `--limit-rate` now throttles the network read itself, and never lets a single read overshoot a small limit
+- Resuming an already-complete file no longer truncates it to 0 bytes; it now reports HTTP 416 and leaves the file intact (a proper success is planned)
+- Segmented downloads from servers that require custom headers or a User-Agent on `HEAD` are now actually segmented instead of silently falling back to one connection
 
 ---
 

@@ -91,3 +91,89 @@ fn a_refused_connection_is_a_network_error() {
     assert!(matches!(err, Error::Network(_)));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn an_error_status_is_an_error_and_writes_nothing() {
+    let base = serve(payload(10), true);
+    for code in [404u16, 500, 403] {
+        let dir = scratch_dir(&format!("single-status-{code}"));
+        let out = dir.join("out.bin");
+
+        let err = download_file(&format!("{base}/status/{code}"), out.to_str().unwrap(), &options(), None)
+            .unwrap_err();
+
+        match err {
+            Error::HttpStatus(status) => assert_eq!(status.as_u16(), code),
+            other => panic!("expected HttpStatus({code}), got {other:?}"),
+        }
+        assert!(!out.exists(), "an error page must not be saved as the file");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn an_error_status_leaves_an_existing_file_untouched() {
+    let base = serve(payload(10), true);
+    let dir = scratch_dir("single-status-keep");
+    let out = dir.join("out.bin");
+    std::fs::write(&out, b"precious").unwrap();
+
+    assert!(download_file(&format!("{base}/status/404"), out.to_str().unwrap(), &options(), None).is_err());
+
+    assert_eq!(std::fs::read(&out).unwrap(), b"precious");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_download_may_outlast_the_timeout_while_data_keeps_flowing() {
+    // Three seconds of trickling against a one second timeout: the timeout is a stall
+    // limit, not a cap on the whole transfer.
+    let data = payload(100_000);
+    let base = serve(data.clone(), true);
+    let dir = scratch_dir("single-trickle");
+    let out = dir.join("out.bin");
+    let mut opts = options();
+    opts.timeout = 1;
+
+    let started = std::time::Instant::now();
+    download_file(&format!("{base}/trickle"), out.to_str().unwrap(), &opts, None).unwrap();
+
+    assert!(started.elapsed() > std::time::Duration::from_millis(2500));
+    assert_eq!(std::fs::read(&out).unwrap(), data);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_stalled_transfer_fails_after_the_timeout() {
+    let base = serve(payload(100_000), true);
+    let dir = scratch_dir("single-stall");
+    let out = dir.join("out.bin");
+    let mut opts = options();
+    opts.timeout = 1;
+
+    let started = std::time::Instant::now();
+    let err = download_file(&format!("{base}/stall"), out.to_str().unwrap(), &opts, None).unwrap_err();
+
+    assert!(matches!(err, Error::Stalled(1)), "got {err:?}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(4));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn the_rate_limit_slows_the_transfer() {
+    let data = payload(200_000);
+    let base = serve(data.clone(), true);
+    let dir = scratch_dir("single-limit");
+    let out = dir.join("out.bin");
+    let mut opts = options();
+    opts.limit_rate = Some(100_000);
+
+    let started = std::time::Instant::now();
+    download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
+    let elapsed = started.elapsed();
+
+    assert!(elapsed > std::time::Duration::from_millis(900), "finished too fast: {elapsed:?}");
+    assert!(elapsed < std::time::Duration::from_secs(6), "finished too slowly: {elapsed:?}");
+    assert_eq!(std::fs::read(&out).unwrap(), data);
+    std::fs::remove_dir_all(dir).unwrap();
+}

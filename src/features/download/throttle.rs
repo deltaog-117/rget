@@ -37,6 +37,15 @@ impl Throttle {
         }
     }
 
+    /// How many bytes the next read may ask for: never more than one second's budget,
+    /// so a large buffer cannot overshoot a small limit.
+    pub(super) fn read_size(&self, buffer_len: usize) -> usize {
+        match self.limit {
+            Some(limit) if limit > 0 => buffer_len.min(limit),
+            _ => buffer_len,
+        }
+    }
+
     /// Accounts for a chunk about to be written, sleeping if the budget is spent.
     pub(super) fn wait(&mut self, chunk_len: usize) {
         if let Some(limit) = self.limit {
@@ -59,6 +68,18 @@ impl Throttle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_are_capped_at_the_limit() {
+        assert_eq!(Throttle::new(Some(1000)).read_size(65536), 1000);
+        assert_eq!(Throttle::new(Some(1 << 20)).read_size(65536), 65536);
+    }
+
+    #[test]
+    fn reads_are_uncapped_without_a_limit() {
+        assert_eq!(Throttle::new(None).read_size(65536), 65536);
+        assert_eq!(Throttle::new(Some(0)).read_size(65536), 65536);
+    }
 
     #[test]
     fn no_limit_never_sleeps() {

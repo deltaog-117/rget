@@ -22,12 +22,13 @@ use super::client;
 use super::error::{Error, Result};
 use super::options::DownloadOptions;
 use super::resume;
+use super::stream;
 use super::throttle::Throttle;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use crate::shared::progress::ProgressBarWrapper;
+use indicatif::MultiProgress;
 use reqwest::header::{ACCEPT_RANGES, RANGE};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
 use std::thread;
 
 /// Splits `total_size` bytes into `segments` inclusive `(start, end)` ranges;
@@ -51,6 +52,12 @@ fn plan_ranges(total_size: u64, segments: usize) -> Vec<(u64, u64)> {
         start = end + 1;
     }
     ranges
+}
+
+/// Splits `--limit-rate` across the segments so the limit holds for the whole download.
+/// `0` (unlimited) stays unlimited, and no segment is ever starved down to zero.
+fn per_segment_limit(limit: Option<usize>, segments: usize) -> Option<usize> {
+    limit.map(|l| if l == 0 { 0 } else { (l / segments.max(1)).max(1) })
 }
 
 /// Concatenates the part files into `output_path`, deleting each part as it is consumed.
@@ -83,10 +90,16 @@ pub(super) fn download(
     let quiet = options.quiet;
     let segments = options.segments;
 
-    // FIXME(B): the probe ignores custom headers, the User-Agent and --follow-redirects.
-    let client = client::build(options.timeout, true)?;
+    let client = client::build(options.timeout, options.follow_redirects)?;
 
-    let head_response = match client.head(url).send() {
+    // The probe carries the same headers as the real requests, so servers that need
+    // auth or a User-Agent answer it, and a disabled redirect policy is respected.
+    let probe = client::apply_headers(
+        client.head(url),
+        options.user_agent.as_deref(),
+        &options.headers,
+    );
+    let head_response = match probe.send() {
         Ok(r) => r,
         Err(e) => {
             if !quiet {
@@ -96,6 +109,17 @@ pub(super) fn download(
         }
     };
 
+    if !head_response.status().is_success() {
+        // The single-connection path reports the real problem (redirect, 403, 404, ...).
+        if !quiet {
+            eprintln!(
+                "⚠️  HEAD request returned {}; falling back to single-thread.",
+                head_response.status()
+            );
+        }
+        return super::download_single(url, output_path, options, multi_progress);
+    }
+
     let total_size = head_response
         .headers()
         .get("content-length")
@@ -103,10 +127,7 @@ pub(super) fn download(
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(0);
 
-    if !quiet {
-        eprintln!("🔍 DEBUG: total_size = {}", total_size);
-        eprintln!("🔍 DEBUG: segments = {}", segments);
-    }
+    log::debug!("total_size = {}, segments = {}", total_size, segments);
 
     if total_size == 0 {
         if !quiet {
@@ -131,10 +152,8 @@ pub(super) fn download(
 
     let mut ranges = plan_ranges(total_size, segments);
 
-    if !quiet {
-        for (i, (start, end)) in ranges.iter().enumerate() {
-            eprintln!("🔍 DEBUG: Range {}: {}-{} (length: {})", i, start, end, end - start + 1);
-        }
+    for (i, (start, end)) in ranges.iter().enumerate() {
+        log::debug!("range {}: {}-{} (length: {})", i, start, end, end - start + 1);
     }
 
     if ranges.is_empty() {
@@ -160,22 +179,17 @@ pub(super) fn download(
         vec![0u64; ranges.len()]
     };
 
-    let progress_bar = if !quiet {
-        let bar = ProgressBar::new(total_size);
-        bar.set_style(
-            ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-                .expect("valid template")
-                .progress_chars("━▸ "),
-        );
-        if options.resume {
-            let downloaded: u64 = resume_positions.iter().sum();
-            bar.set_position(downloaded);
+    let progress = if !quiet {
+        let downloaded: u64 = if options.resume { resume_positions.iter().sum() } else { 0 };
+        let wrapper = ProgressBarWrapper::new(total_size, downloaded);
+        if let Some(mp) = multi_progress {
+            mp.add(wrapper.get_bar().clone());
         }
-        Some(Arc::new(Mutex::new(bar)))
+        Some(wrapper)
     } else {
         None
     };
+    let segment_limit = per_segment_limit(options.limit_rate, ranges.len());
 
     let mut handles = Vec::with_capacity(ranges.len());
     for i in 0..ranges.len() {
@@ -187,13 +201,13 @@ pub(super) fn download(
         }
         let user_agent = options.user_agent.clone();
         let timeout = options.timeout;
-        let limit_rate = options.limit_rate;
-        let progress_bar = progress_bar.clone();
+        let follow_redirects = options.follow_redirects;
+        let progress_bar = progress.as_ref().map(|p| p.get_bar().clone());
         let resume_pos = resume_positions[i];
         let headers = options.headers.clone();
 
         let handle = thread::spawn(move || -> Result<()> {
-            let client = client::build(timeout, true)?;
+            let client = client::build(timeout, follow_redirects)?;
 
             let mut request_builder = client.get(&url);
             if resume_pos > 0 {
@@ -210,7 +224,7 @@ pub(super) fn download(
             let request_builder =
                 client::apply_headers(request_builder, user_agent.as_deref(), &headers);
 
-            let response = request_builder.send()?;
+            let mut response = request_builder.send()?;
 
             if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
                 return Err(Error::ProtocolError(format!(
@@ -241,20 +255,13 @@ pub(super) fn download(
                     .open(&part_path)?
             };
 
-            let mut throttle = Throttle::new(limit_rate);
-            let chunk_size = 8192;
-
-            // FIXME(A1): buffers the whole part in memory before writing anything.
-            let bytes = response.bytes()?;
-            for chunk in bytes.chunks(chunk_size) {
-                throttle.wait(chunk.len());
-
-                file.write_all(chunk)?;
-                if let Some(ref pb) = progress_bar {
-                    let bar = pb.lock().unwrap();
-                    bar.inc(chunk.len() as u64);
+            let mut throttle = Throttle::new(segment_limit);
+            let written = stream::copy(&mut response, &mut file, &mut throttle, timeout, |n| {
+                if let Some(ref bar) = progress_bar {
+                    bar.inc(n);
                 }
-            }
+            })?;
+            log::debug!("part {} wrote {} bytes", i, written);
 
             if !quiet {
                 eprintln!("✅ Part {} complete", i);
@@ -309,9 +316,8 @@ pub(super) fn download(
 
     merge_parts(output_path, &part_paths)?;
 
-    if let Some(pb) = progress_bar {
-        let bar = pb.lock().unwrap();
-        bar.finish();
+    if let Some(p) = progress {
+        p.finish();
     }
 
     if !quiet {
@@ -344,6 +350,19 @@ mod tests {
             plan_ranges(3_000_017, 4),
             vec![(0, 750_003), (750_004, 1_500_007), (1_500_008, 2_250_011), (2_250_012, 3_000_016)]
         );
+    }
+
+    #[test]
+    fn the_limit_is_shared_between_segments() {
+        assert_eq!(per_segment_limit(Some(4_000_000), 4), Some(1_000_000));
+        assert_eq!(per_segment_limit(Some(1_000_000), 1), Some(1_000_000));
+    }
+
+    #[test]
+    fn unlimited_stays_unlimited_and_no_segment_is_starved() {
+        assert_eq!(per_segment_limit(None, 4), None);
+        assert_eq!(per_segment_limit(Some(0), 4), Some(0));
+        assert_eq!(per_segment_limit(Some(3), 8), Some(1));
     }
 
     #[test]
