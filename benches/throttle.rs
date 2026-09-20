@@ -16,7 +16,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-//! Throughput of the streaming download path over loopback.
+//! Throughput of the streaming download path over loopback, including the staged
+//! `name.part` write and the rename into place.
 //!
 //! Run with `cargo bench`. To gate a change on regressions, record a baseline first
 //! (`cargo bench -- --save-baseline before`), then compare (`cargo bench -- --baseline before`)
@@ -74,19 +75,23 @@ fn bench_download(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(PAYLOAD_BYTES as u64));
     group.sample_size(10);
 
-    // /dev/null keeps disk speed out of the measurement.
+    // A real file, so the `.part` staging and the final rename are part of what is measured.
+    let out = std::env::temp_dir().join(format!("rget-bench-{}.bin", std::process::id()));
+    let out = out.to_str().expect("the temp directory path is valid UTF-8");
+
     let unthrottled = options(None);
     group.bench_function("unthrottled", |b| {
-        b.iter(|| download_file(&url, "/dev/null", &unthrottled, None).expect("unthrottled download"));
+        b.iter(|| download_file(&url, out, &unthrottled, None).expect("unthrottled download"));
     });
 
     // A limit far above loopback speed: measures the cost of the throttle bookkeeping.
     let generous = options(Some(4 * 1024 * 1024 * 1024));
     group.bench_function("limit_4GiB_per_s", |b| {
-        b.iter(|| download_file(&url, "/dev/null", &generous, None).expect("throttled download"));
+        b.iter(|| download_file(&url, out, &generous, None).expect("throttled download"));
     });
 
     group.finish();
+    let _ = std::fs::remove_file(out);
 }
 
 criterion_group!(benches, bench_download);

@@ -34,8 +34,12 @@ pub enum Error {
     #[error("Protocol error: {0}")]
     ProtocolError(String),
 
-    #[error("HTTP error: {0}")]
-    HttpStatus(reqwest::StatusCode),
+    #[error("HTTP error: {status}")]
+    HttpStatus {
+        status: reqwest::StatusCode,
+        /// How long the server asked us to wait (`Retry-After`), if it did.
+        retry_after: Option<std::time::Duration>,
+    },
 
     #[error("Timed out: no data received for {0}s")]
     Stalled(u64),

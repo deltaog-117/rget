@@ -16,6 +16,8 @@
 | 2026-09-20 | Proving "no behaviour change" | 65-case end-to-end baseline diff plus characterization tests | ✅ Confirmed |
 | 2026-09-20 | Streaming the body and the meaning of `-t` | Explicit read loop; timeout becomes a stall limit | ✅ Confirmed |
 | 2026-09-20 | `--limit-rate` with `--segments` | Limit applies to the whole download | ✅ Confirmed |
+| 2026-09-20 | Partial downloads and resume validation | `name.part` + `.part.meta` sidecar, `If-Range` | ✅ Confirmed |
+| 2026-09-20 | Retry policy | Classify errors; honour `Retry-After` (cap 60s) | ✅ Confirmed |
 
 ---
 
@@ -456,6 +458,181 @@ It fixes the real problem with no new shared state. `0` (unlimited) stays unlimi
 
 **Trade-offs accepted:**
 - When one segment finishes early, the others stay at their share instead of speeding up.
+
+---
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-09-20 | Initial entry | deltaog-117 |
+
+---
+
+### Partial Downloads and Resume Validation
+
+**Date:** 2026-09-20
+**Status:** Confirmed
+
+---
+
+#### Context / Background
+
+Three roadmap items were tangled: A5 (resume correctness: a complete file was truncated, a changed remote file produced a corrupt result, retries restarted from zero, segmented resume skipped bytes), C5 (partial data lived under the final name), and the need for a *validator* (ETag or Last-Modified) remembered from the earlier response. Where the partial state is stored decides where that memory can live, so they were designed together.
+
+---
+
+#### Options Considered
+
+**Option A: `name.part` plus a sidecar `name.part.meta`, validated with `If-Range`**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Exact change detection with standard HTTP <br> • Works across runs <br> • Falls back to Last-Modified when there is no ETag <br> • A sidecar for another URL is ignored safely <br> • The `toml` and `serde` dependencies already existed |
+| **Disadvantages** | • An extra file next to the download <br> • A moved `.part` loses its sidecar and resumes unvalidated |
+| **Implementation Difficulty** | Medium |
+| **Fit with Constraints** | Best |
+
+**Option B: `name.part` only, with a stateless overlap check (re-fetch the last 4 KiB and compare)**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • No extra file |
+| **Disadvantages** | • Only a heuristic: misses changes outside the window <br> • Costs an extra request <br> • Awkward to splice into the stream |
+| **Implementation Difficulty** | Medium |
+| **Fit with Constraints** | Weak |
+
+**Option C: Validators in memory only, partial data stays under the final name**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Smallest change |
+| **Disadvantages** | • Does not fix C5 <br> • A changed file across runs still corrupts |
+| **Implementation Difficulty** | Easy |
+| **Fit with Constraints** | Poor |
+
+---
+
+#### Decision & Rationale
+
+**Chosen Option:** A
+
+**Reasoning:**
+
+Retries within a run and resumes across runs then use the same mechanism: the state on disk. There is no in-memory state to lose, and a retry is simply another attempt that finds a `.part` file and its sidecar. Writing to `name.part` and renaming at the end also means an existing `name` is only replaced by a finished download.
+
+**The resume state machine** (`resume.rs`, pure functions with a decision table in the module docs, exhaustive unit tests, and property tests), per `2engineering.md` pillar 4:
+
+| Request | Response | Meaning |
+|---------|----------|---------|
+| full (no usable partial) | 2xx | normal download |
+| `Range: from-` | 206 starting at `from` | append |
+| `Range: from-` | 206 elsewhere, or without `Content-Range` | error (wrong offset) |
+| `Range: from-` + `If-Range` | 200 | remote file changed: restart |
+| `Range: from-` | 200 | server ignores ranges: restart |
+| `Range: from-` | 416, complete length equals `from` | already complete: success |
+| `Range: from-` | 416, any other length | partial is stale: drop it and refetch |
+| any | other status | reported by the caller |
+
+Before the request, `plan` decides between `Fresh` and `Continue`: no partial data, a sidecar for another URL, or more partial bytes than the file has all mean `Fresh`. A strong ETag is the validator; a weak ETag is never sent in `If-Range`, so Last-Modified is used instead. With no sidecar at all (data from 1.0.0 or another tool) the resume goes ahead unvalidated, as wget and curl do.
+
+**Behaviour rules:**
+- Without `-c`, a leftover `name.part` is discarded. Within a run, retries always continue from what the previous attempt wrote; a server that ignores `Range` just answers `200`, which restarts.
+- `-c` also adopts a partial `name` (renamed to `name.part` only once the server confirms it will resume), so partials from 1.0.0 still work.
+- A target that exists but is not a regular file (`/dev/null`, a FIFO) is written directly.
+- A symlinked output is resolved first, so the download writes through it. The first version of the staging replaced the link with a regular file; a manual check caught this and a test now pins it. A dangling link cannot be resolved and is replaced.
+
+**Trade-offs accepted:**
+- One more file beside an in-progress download.
+- Segmented downloads keep their `name.partN` files without validators; only the double-offset bug (a partial part resumed twice as far in as it should have been) was fixed here. Validation and cleanup for segments is roadmap item B11. Their merge now goes through `name.part` and a rename.
+- A server that answers `206` to an `If-Range` it should have rejected cannot be detected.
+
+---
+
+#### Implementation Notes
+
+- New `partial.rs` (paths, the `.part` lifecycle, the sidecar) and a rewritten `resume.rs`; `single.rs` orchestrates.
+- The benchmark now writes to a real file so the staging and rename are measured: about 340–360 MiB/s over loopback, against 400–470 MiB/s to `/dev/null` before, which is the cost of actually writing 32 MiB.
+- Mutation-checked: removing `If-Range`, retrying everything, ignoring `Retry-After`, and restarting instead of continuing each made a specific integration test fail.
+
+---
+
+#### References
+
+- `$SUITE/2engineering.md` (pillars 1, 2 and 4), RFC 9110 sections 13.1.5 (`If-Range`) and 14 (ranges)
+- `ROADMAP.md`, items A5, C5
+
+---
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-09-20 | Initial entry | deltaog-117 |
+
+---
+
+### Retry Policy
+
+**Date:** 2026-09-20
+**Status:** Confirmed
+
+---
+
+#### Context / Background
+
+Every error was retried, including ones that cannot succeed (a 404, a blocked URL), and a server's `Retry-After` was ignored. The backoff exponent also overflowed for a very large `-r`.
+
+---
+
+#### Options Considered
+
+**Option A: Classify the error in the retry loop; carry `Retry-After` on the error**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Small and testable <br> • The typed errors added in Cycle 1 make the rule a single `match` |
+| **Disadvantages** | • The policy is fixed in code |
+| **Implementation Difficulty** | Easy |
+| **Fit with Constraints** | Best |
+
+**Option B: A configurable `RetryPolicy` struct (flags such as `--retry-all-errors`, `--retry-max-time`)**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Extensible |
+| **Disadvantages** | • New CLI surface nobody has asked for yet |
+| **Implementation Difficulty** | Medium |
+| **Fit with Constraints** | Premature |
+
+**Option C: Keep retrying everything**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • No change |
+| **Disadvantages** | • A permanent failure costs the whole backoff schedule |
+| **Implementation Difficulty** | None |
+| **Fit with Constraints** | Poor |
+
+---
+
+#### Decision & Rationale
+
+**Chosen Option:** A
+
+**Reasoning:**
+
+Retried: a stalled transfer, transport errors, and HTTP 408, 425, 429, 500, 502, 503 and 504 (the same set as `curl --retry`). Not retried: other 4xx, 501/505, a disabled redirect, protocol errors, and I/O errors (a full disk will not clear by itself). A `Retry-After` (seconds or an HTTP-date) replaces the computed backoff when it is longer; the wait is capped at 60s, and a server that asks for more makes us give up immediately and say so, rather than sleep. The backoff itself is capped and saturating.
+
+**Trade-offs accepted:**
+- Every transport error is retried except a malformed request or a redirect loop. `reqwest` does not distinguish a refused connection from an invalid certificate or a missing DNS name, so those are retried too. That is harmless but slow, and it is on the roadmap as D8.
+- `-r` still defaults to 0, so none of this matters until `-r N` is used.
+
+---
+
+#### References
+
+- `ROADMAP.md`, item A6
 
 ---
 

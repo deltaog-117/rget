@@ -21,6 +21,7 @@ serde = { version = "1.0", features = ["derive"] }
 regex = "1.13"          # For sanitization
 urlencoding = "2.1"     # For decoding encoded attacks
 log = "0.4"             # Debug tracing (RUST_LOG=debug)
+httpdate = "1"          # Retry-After HTTP-dates
 
 [dev-dependencies]
 proptest = "1"

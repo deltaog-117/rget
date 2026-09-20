@@ -21,6 +21,7 @@
 use super::client;
 use super::error::{Error, Result};
 use super::options::DownloadOptions;
+use super::partial::Target;
 use super::resume;
 use super::stream;
 use super::throttle::Throttle;
@@ -29,6 +30,7 @@ use indicatif::MultiProgress;
 use reqwest::header::{ACCEPT_RANGES, RANGE};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::thread;
 
 /// Splits `total_size` bytes into `segments` inclusive `(start, end)` ranges;
@@ -62,14 +64,14 @@ fn per_segment_limit(limit: Option<usize>, segments: usize) -> Option<usize> {
 
 /// Concatenates the part files into `output_path`, deleting each part as it is consumed.
 ///
-/// FIXME(B): reads each part fully into memory before writing it.
-fn merge_parts(output_path: &str, part_paths: &[String]) -> Result<()> {
+/// FIXME(B9): reads each part fully into memory before writing it.
+fn merge_parts(output_path: &Path, part_paths: &[PathBuf]) -> Result<()> {
     let mut output_file = File::create(output_path)?;
     for part_path in part_paths {
-        if !std::path::Path::new(part_path).exists() {
+        if !part_path.exists() {
             return Err(Error::ProtocolError(format!(
                 "Part file {} missing",
-                part_path
+                part_path.display()
             )));
         }
         let mut part_file = File::open(part_path)?;
@@ -150,7 +152,7 @@ pub(super) fn download(
         return super::download_single(url, output_path, options, multi_progress);
     }
 
-    let mut ranges = plan_ranges(total_size, segments);
+    let ranges = plan_ranges(total_size, segments);
 
     for (i, (start, end)) in ranges.iter().enumerate() {
         log::debug!("range {}: {}-{} (length: {})", i, start, end, end - start + 1);
@@ -169,12 +171,12 @@ pub(super) fn download(
         return super::download_single(url, output_path, options, multi_progress);
     }
 
-    let part_paths: Vec<String> = (0..ranges.len())
-        .map(|i| format!("{}.part{}", output_path, i))
+    let part_paths: Vec<PathBuf> = (0..ranges.len())
+        .map(|i| PathBuf::from(format!("{}.part{}", output_path, i)))
         .collect();
 
     let resume_positions = if options.resume {
-        resume::segment_positions(&part_paths, &mut ranges)
+        resume::segment_positions(&part_paths, &ranges)
     } else {
         vec![0u64; ranges.len()]
     };
@@ -314,7 +316,10 @@ pub(super) fn download(
         }
     }
 
-    merge_parts(output_path, &part_paths)?;
+    // The merged file is staged as `name.part` and renamed, like a single-connection download.
+    let target = Target::resolve(output_path);
+    merge_parts(target.work_path(), &part_paths)?;
+    target.finish()?;
 
     if let Some(p) = progress {
         p.finish();

@@ -100,7 +100,7 @@ fn a_probe_without_the_headers_is_refused_and_reported() {
 
     let err = download_file(&format!("{base}/guarded"), out.to_str().unwrap(), &opts, None).unwrap_err();
 
-    assert!(matches!(err, Error::HttpStatus(s) if s.as_u16() == 403), "got {err:?}");
+    assert!(matches!(err, Error::HttpStatus { status: s, .. } if s.as_u16() == 403), "got {err:?}");
     assert!(!out.exists());
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -130,7 +130,46 @@ fn an_error_status_on_the_probe_is_reported_not_saved() {
 
     let err = download_file(&format!("{base}/status/404"), out.to_str().unwrap(), &opts, None).unwrap_err();
 
-    assert!(matches!(err, Error::HttpStatus(s) if s.as_u16() == 404), "got {err:?}");
+    assert!(matches!(err, Error::HttpStatus { status: s, .. } if s.as_u16() == 404), "got {err:?}");
     assert!(!out.exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_segmented_resume_continues_partial_parts_at_the_right_offset() {
+    // 300_017 bytes in 4 segments: (0,75003) (75004,150007) (150008,225011) (225012,300016).
+    // Part 0 is partial, part 1 is missing, part 2 is complete-up-to-10_000 bytes.
+    let data = payload(300_017);
+    let base = serve(data.clone(), true);
+    let dir = scratch_dir("seg-resume");
+    let out = dir.join("out.bin");
+    std::fs::write(dir.join("out.bin.part0"), &data[..30_000]).unwrap();
+    std::fs::write(dir.join("out.bin.part2"), &data[150_008..160_008]).unwrap();
+    let mut opts = options();
+    opts.segments = 4;
+    opts.resume = true;
+
+    download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
+
+    assert_eq!(std::fs::read(&out).unwrap(), data);
+    assert!(leftover_parts(&dir).is_empty(), "leftover: {:?}", leftover_parts(&dir));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_segmented_download_never_shows_a_half_merged_final_file() {
+    // The merge happens in `name.part`; until the rename, `name` keeps its old content.
+    let data = payload(100_000);
+    let base = serve(data.clone(), true);
+    let dir = scratch_dir("seg-atomic");
+    let out = dir.join("out.bin");
+    std::fs::write(&out, b"previous version").unwrap();
+    let mut opts = options();
+    opts.segments = 2;
+
+    download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
+
+    assert_eq!(std::fs::read(&out).unwrap(), data);
+    assert!(leftover_parts(&dir).is_empty());
     std::fs::remove_dir_all(dir).unwrap();
 }

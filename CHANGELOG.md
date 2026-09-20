@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Debug tracing through the `log` crate: run with `RUST_LOG=debug` to see the probe result, segment ranges and per-part byte counts (replaces the always-on `🔍 DEBUG:` lines)
 - Property tests for the streaming helper (`proptest`) and a `criterion` throughput benchmark, `cargo bench`
 - Integration tests for slow and stalled servers, HTTP error statuses, header-guarded servers, and rate limiting
+- Downloads are staged as `name.part` next to a small `name.part.meta` sidecar (URL, ETag, Last-Modified, size) and renamed into place only when complete
+- Resume validation with `If-Range`: a partial download is only continued when the remote file is unchanged
+- `Retry-After` support (seconds or HTTP-date), and a retry policy that distinguishes transient from permanent failures
+- Tests for the resume state machine and retry policy (property tests and a decision table), integration tests for ETag changes, dropped connections, `Retry-After`, and symlinked and device outputs
 
 ### Changed
 - Restructured the source tree from a flat `src/` into a feature-first layout: `app/` (CLI, config, settings merge, wiring), `features/{download,validation,integrity,input,destination}/`, and `shared/` (progress bar, size parsing). `main.rs` is now a thin entry point. No user-visible behaviour change; verified identical to 1.0.0 across 65 end-to-end cases.
@@ -24,14 +28,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--limit-rate` combined with `--segments N` now applies to the download as a whole (each segment gets `1/N` of the limit) instead of giving every segment the full limit
 - The segmented `HEAD` probe now sends `-H` headers and the User-Agent and honours `--follow-redirects false`; a non-2xx probe falls back to the single-connection path, which reports the real error
 - Segmented downloads now take part in the `MultiProgress` display
-- Errors gained two variants, `HttpStatus` and `Stalled`, so callers (and the upcoming retry logic) can tell them from other network failures
+- Errors gained two variants, `HttpStatus` and `Stalled`, so callers (and the retry logic) can tell them from other network failures
+- An interrupted or failed download now leaves `name.part` (and its sidecar) instead of a partial file under the final name; an existing file is replaced only by the final rename
+- `-c` continues from `name.part`, and still adopts a partial `name` left by rget 1.0.0 or another tool. Without `-c`, a leftover `name.part` from an earlier run is discarded
+- Retries within a run continue from the bytes the previous attempt wrote (when the server supports ranges) instead of starting over
+- Only transient failures are retried: timeouts, connection errors, and HTTP 408, 425, 429, 500, 502, 503 and 504. Other errors (404, a full disk, a disabled redirect) now fail at once; the backoff is capped at 60s
+- The benchmark now writes to a real file, so the staging and rename are included in what it measures
 
 ### Fixed
 - Downloads no longer buffer the whole file in memory: the body is streamed through a single 64 KiB buffer (a 400 MiB download peaked at 437 MB before and 24 MB now)
 - Downloads that take longer than the timeout (default 30s) no longer fail while data is still arriving
 - HTTP error responses (404, 500, …) are no longer saved as the output file and reported as complete; they fail with `HTTP error: <status>` and leave the destination untouched
 - `--limit-rate` now throttles the network read itself, and never lets a single read overshoot a small limit
-- Resuming an already-complete file no longer truncates it to 0 bytes; it now reports HTTP 416 and leaves the file intact (a proper success is planned)
+- Resuming an already-complete file no longer truncates it to 0 bytes: it now reports that the file is already fully retrieved and succeeds
+- Resuming a download whose remote file changed no longer produces a corrupt file: the change is detected and the download restarts
+- Segmented resume no longer skips bytes: a partially downloaded part used to be resumed twice as far in as it should have been, giving a short, corrupt file
+- A failed re-download no longer destroys an existing file, and a stalled or interrupted one no longer leaves partial data under the final name
+- A `Retry-After` from the server is honoured instead of being ignored, and a very large `-r` no longer overflows the backoff
+- The progress bar on a resumed download now shows the full file size
 - Segmented downloads from servers that require custom headers or a User-Agent on `HEAD` are now actually segmented instead of silently falling back to one connection
 
 ---

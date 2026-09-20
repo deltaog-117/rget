@@ -20,8 +20,8 @@
 
 use super::error::{Error, Result};
 use reqwest::blocking::{Client, RequestBuilder, Response};
-use reqwest::header::USER_AGENT;
-use std::time::Duration;
+use reqwest::header::{RETRY_AFTER, USER_AGENT};
+use std::time::{Duration, SystemTime};
 
 /// Builds a blocking client with the given timeout and redirect policy.
 ///
@@ -67,6 +67,11 @@ pub(super) fn ensure_success(response: Response) -> Result<Response> {
     if status.is_success() {
         Ok(response)
     } else {
-        Err(Error::HttpStatus(status))
+        let retry_after = response
+            .headers()
+            .get(RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| super::retry::parse_retry_after(v, SystemTime::now()));
+        Err(Error::HttpStatus { status, retry_after })
     }
 }

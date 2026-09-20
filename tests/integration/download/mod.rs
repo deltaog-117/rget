@@ -21,19 +21,29 @@
 //! The download feature does not validate URLs (that is `validation`'s job), so it can
 //! be pointed straight at 127.0.0.1.
 //!
-//! Routes: `/file` (the payload, honouring `Range` unless disabled), `/redirect` (302 to
-//! `/file`), `/status/<code>` (that status with a short body), `/trickle` (the payload in
-//! ten pieces, 300 ms apart), `/stall` (half the payload, then silence), and `/guarded`
-//! (like `/file`, but 403 unless the request carries `X-Token: ok` and `User-Agent: probe/1`).
+//! Routes:
+//! - `/file`: the payload, with an `ETag`, honouring `Range` (and `If-Range`) unless disabled
+//! - `/redirect`: 302 to `/file`
+//! - `/status/<code>`: that status with a short body
+//! - `/once/<code>`: that status the first time (with `Retry-After: 1` for 429), then `/file`
+//! - `/long/503`: always 503 with `Retry-After: 300`
+//! - `/dropmid`: the first request promises the whole payload but closes after half, then `/file`
+//! - `/trickle`: the payload in ten pieces, 300 ms apart
+//! - `/stall`: half the payload, then silence
+//! - `/guarded`: like `/file`, but 403 unless the request carries `X-Token: ok` and `User-Agent: probe/1`
 
 mod resume;
+mod retry;
 mod segmented;
 mod single;
 
 use rget::features::download::DownloadOptions;
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -63,21 +73,65 @@ pub(crate) fn scratch_dir(name: &str) -> PathBuf {
     dir
 }
 
+/// What the server saw, for tests that assert on the requests themselves.
+#[derive(Default)]
+pub(crate) struct Stats {
+    /// Every request, including HEAD.
+    pub hits: AtomicUsize,
+    /// Requests that carried a `Range` header.
+    pub ranged: AtomicUsize,
+}
+
+impl Stats {
+    pub(crate) fn hits(&self) -> usize {
+        self.hits.load(Ordering::SeqCst)
+    }
+    pub(crate) fn ranged(&self) -> usize {
+        self.ranged.load(Ordering::SeqCst)
+    }
+}
+
+struct Config {
+    payload: Vec<u8>,
+    ranges: bool,
+    etag: String,
+}
+
 /// Serves the routes above on a random port and returns the base URL. With `ranges`
 /// off the server ignores `Range` and does not advertise `Accept-Ranges`.
 pub(crate) fn serve(payload: Vec<u8>, ranges: bool) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
-    thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            let payload = payload.clone();
-            thread::spawn(move || handle(stream, &payload, ranges));
-        }
-    });
-    base
+    serve_with(payload, ranges, "\"v1\"").0
 }
 
-fn handle(mut stream: TcpStream, payload: &[u8], ranges: bool) {
+/// Like [`serve`], with a chosen `ETag` and request statistics.
+pub(crate) fn serve_with(payload: Vec<u8>, ranges: bool, etag: &str) -> (String, Arc<Stats>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let config = Arc::new(Config { payload, ranges, etag: etag.to_string() });
+    let stats = Arc::new(Stats::default());
+    let seen: Arc<Mutex<HashMap<String, usize>>> = Arc::default();
+    let shared = stats.clone();
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let (config, stats, seen) = (config.clone(), shared.clone(), seen.clone());
+            thread::spawn(move || handle(stream, &config, &stats, &seen));
+        }
+    });
+    (base, stats)
+}
+
+fn respond(stream: &mut TcpStream, status: &str, extra: &str, body: &[u8], head_only: bool) {
+    let head = format!(
+        "HTTP/1.1 {status}\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(head.as_bytes());
+    if !head_only {
+        let _ = stream.write_all(body);
+    }
+}
+
+fn handle(mut stream: TcpStream, config: &Config, stats: &Stats, seen: &Mutex<HashMap<String, usize>>) {
     let mut request = Vec::new();
     let mut buf = [0u8; 1024];
     while !request.windows(4).any(|w| w == b"\r\n\r\n") {
@@ -93,68 +147,103 @@ fn handle(mut stream: TcpStream, payload: &[u8], ranges: bool) {
     let path = first.next().unwrap_or_default().to_string();
     let headers: Vec<String> = lines.map(|l| l.to_ascii_lowercase()).collect();
     let has = |h: &str| headers.iter().any(|l| l == h);
-    let range = headers
-        .iter()
-        .find_map(|l| l.strip_prefix("range: bytes=").map(str::to_string));
+    let header = |name: &str| {
+        headers
+            .iter()
+            .find_map(|l| l.strip_prefix(name).map(|v| v.trim().to_string()))
+    };
+    let range = header("range: bytes=");
+    let if_range = text
+        .lines()
+        .find_map(|l| l.strip_prefix("If-Range: ").or_else(|| l.strip_prefix("if-range: ")))
+        .map(|v| v.trim().to_string());
 
+    stats.hits.fetch_add(1, Ordering::SeqCst);
+    if range.is_some() {
+        stats.ranged.fetch_add(1, Ordering::SeqCst);
+    }
     let head_only = method == "HEAD";
-    let effective = match path.as_str() {
-        "/guarded" if has("x-token: ok") && has("user-agent: probe/1") => "/file",
-        "/guarded" => "/forbidden",
-        other => other,
+    let times_seen = |key: &str| {
+        let mut map = seen.lock().unwrap();
+        let n = map.entry(key.to_string()).or_insert(0);
+        *n += 1;
+        *n
     };
 
+    let mut effective = path.as_str();
+    match path.as_str() {
+        "/guarded" => {
+            effective = if has("x-token: ok") && has("user-agent: probe/1") { "/file" } else { "/forbidden" };
+        }
+        "/dropmid" => {
+            if times_seen("dropmid") == 1 {
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nETag: {}\r\nAccept-Ranges: bytes\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    config.etag,
+                    config.payload.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(&config.payload[..config.payload.len() / 2]);
+                return;
+            }
+            effective = "/file";
+        }
+        p if p.starts_with("/once/") => {
+            if times_seen(p) == 1 {
+                let code: u16 = p["/once/".len()..].parse().unwrap();
+                let extra = if code == 429 { "Retry-After: 1\r\n" } else { "" };
+                respond(&mut stream, &format!("{code} Test"), extra, b"try again", head_only);
+                return;
+            }
+            effective = "/file";
+        }
+        _ => {}
+    }
+
     if effective == "/trickle" || effective == "/stall" {
-        write_slowly(stream, payload, effective == "/stall", head_only);
+        write_slowly(stream, &config.payload, effective == "/stall", head_only);
         return;
     }
 
-    let (status, extra, body): (String, String, &[u8]) = match (effective, range) {
-        ("/redirect", _) => ("302 Found".into(), "Location: /file\r\n".into(), &[]),
-        ("/forbidden", _) => ("403 Forbidden".into(), String::new(), b"forbidden"),
-        ("/file", Some(spec)) if ranges => {
-            let (start, end) = spec.split_once('-').unwrap();
-            let start: usize = start.parse().unwrap();
-            if start >= payload.len() {
-                (
-                    "416 Range Not Satisfiable".into(),
-                    format!("Content-Range: bytes */{}\r\n", payload.len()),
-                    &[],
-                )
-            } else {
-                let end: usize = if end.is_empty() { payload.len() - 1 } else { end.parse().unwrap() };
-                let end = end.min(payload.len() - 1);
-                (
-                    "206 Partial Content".into(),
-                    format!(
-                        "Content-Range: bytes {}-{}/{}\r\nAccept-Ranges: bytes\r\n",
-                        start,
-                        end,
-                        payload.len()
-                    ),
-                    &payload[start..=end],
-                )
+    let payload = &config.payload;
+    match effective {
+        "/redirect" => respond(&mut stream, "302 Found", "Location: /file\r\n", &[], head_only),
+        "/forbidden" => respond(&mut stream, "403 Forbidden", "", b"forbidden", head_only),
+        "/long/503" => respond(&mut stream, "503 Test", "Retry-After: 300\r\n", b"later", head_only),
+        "/file" => {
+            let etag_line = format!("ETag: {}\r\n", config.etag);
+            // A validator that no longer matches means: ignore the Range, send everything.
+            let honour_range = config.ranges && if_range.as_deref().is_none_or(|v| v == config.etag);
+            match range {
+                Some(spec) if honour_range => {
+                    let (start, end) = spec.split_once('-').unwrap();
+                    let start: usize = start.parse().unwrap();
+                    if start >= payload.len() {
+                        let extra = format!("Content-Range: bytes */{}\r\n", payload.len());
+                        respond(&mut stream, "416 Range Not Satisfiable", &extra, &[], head_only);
+                    } else {
+                        let end: usize = if end.is_empty() { payload.len() - 1 } else { end.parse().unwrap() };
+                        let end = end.min(payload.len() - 1);
+                        let extra = format!(
+                            "{etag_line}Content-Range: bytes {}-{}/{}\r\nAccept-Ranges: bytes\r\n",
+                            start,
+                            end,
+                            payload.len()
+                        );
+                        respond(&mut stream, "206 Partial Content", &extra, &payload[start..=end], head_only);
+                    }
+                }
+                _ => {
+                    let accept = if config.ranges { "Accept-Ranges: bytes\r\n" } else { "" };
+                    respond(&mut stream, "200 OK", &format!("{etag_line}{accept}"), payload, head_only);
+                }
             }
         }
-        ("/file", _) => (
-            "200 OK".into(),
-            if ranges { "Accept-Ranges: bytes\r\n".to_string() } else { String::new() },
-            payload,
-        ),
-        (p, _) if p.starts_with("/status/") => {
+        p if p.starts_with("/status/") => {
             let code: u16 = p["/status/".len()..].parse().unwrap();
-            (format!("{code} Test"), String::new(), b"error page")
+            respond(&mut stream, &format!("{code} Test"), "", b"error page", head_only);
         }
-        _ => ("404 Not Found".into(), String::new(), b"not found"),
-    };
-
-    let head = format!(
-        "HTTP/1.1 {status}\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
-    let _ = stream.write_all(head.as_bytes());
-    if !head_only {
-        let _ = stream.write_all(body);
+        _ => respond(&mut stream, "404 Not Found", "", b"not found", head_only),
     }
 }
 

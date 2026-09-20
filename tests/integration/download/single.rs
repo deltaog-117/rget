@@ -103,7 +103,7 @@ fn an_error_status_is_an_error_and_writes_nothing() {
             .unwrap_err();
 
         match err {
-            Error::HttpStatus(status) => assert_eq!(status.as_u16(), code),
+            Error::HttpStatus { status, .. } => assert_eq!(status.as_u16(), code),
             other => panic!("expected HttpStatus({code}), got {other:?}"),
         }
         assert!(!out.exists(), "an error page must not be saved as the file");
@@ -175,5 +175,17 @@ fn the_rate_limit_slows_the_transfer() {
     assert!(elapsed > std::time::Duration::from_millis(900), "finished too fast: {elapsed:?}");
     assert!(elapsed < std::time::Duration::from_secs(6), "finished too slowly: {elapsed:?}");
     assert_eq!(std::fs::read(&out).unwrap(), data);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn an_error_status_creates_no_part_file() {
+    let base = serve(payload(10), true);
+    let dir = scratch_dir("single-status-nopart");
+    let out = dir.join("out.bin");
+
+    assert!(download_file(&format!("{base}/status/500"), out.to_str().unwrap(), &options(), None).is_err());
+
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "nothing should be left behind");
     std::fs::remove_dir_all(dir).unwrap();
 }

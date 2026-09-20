@@ -30,8 +30,9 @@ Whether you're a developer downloading dependencies, a sysadmin fetching logs, o
 - 🔒 **Military‑grade sanitization** — Blocks command injection, path traversal, and sensitive file access
 - 🚀 **Segmented downloads** (`--segments`) — Split files into parts and download in parallel for maximum speed
 - 📦 **Parallel downloads** (`-j`) — Download multiple URLs concurrently
-- 🔄 **Automatic retries** (`-r`) — Exponential backoff with jitter for unstable networks
-- 💾 **Resume support** (`-c`) — Resume interrupted downloads
+- 🔄 **Automatic retries** (`-r`) — Exponential backoff with jitter for transient failures (timeouts, connection errors, 408/425/429/5xx); honours the server's `Retry-After`
+- 💾 **Resume support** (`-c`) — Continue interrupted downloads; the remote file is checked (`ETag`/`Last-Modified`) so a changed file restarts instead of being corrupted
+- 🛡️ **Safe partial files** — data is written to `name.part` and renamed only when complete, so a failed download never damages an existing file
 - 📂 **Default Downloads folder** — Files automatically save to `~/Downloads`
 - ⚙️ **Configuration file** — Set defaults in `~/.config/rget/config.toml`
 - 🔐 **SHA‑256 checksum verification** — Verify file integrity
@@ -98,6 +99,7 @@ rget -P ~/Documents https://example.com/file.zip
 ```bash
 rget -c https://example.com/large-file.iso
 ```
+While a download runs, its data lives in `large-file.iso.part` (plus a small `large-file.iso.part.meta` recording which remote file it came from). Both are removed when the download completes. Run the same command with `-c` to continue; if the remote file has changed in the meantime, rget says so and starts over. Without `-c`, a leftover `.part` file is discarded.
 
 ### Download with 4 segments (faster!)
 ```bash
@@ -136,6 +138,7 @@ rget --limit-rate 1M https://example.com/large-file.iso
 ```bash
 rget -r 3 https://example.com/unstable-file.zip
 ```
+Only failures that can heal are retried (timeouts, dropped connections, and HTTP 408, 425, 429, 500, 502, 503, 504); a 404 fails immediately. A retry continues from the bytes already received, and a `Retry-After` from the server is respected (up to 60 seconds).
 
 ### Verify SHA‑256 checksum
 ```bash
