@@ -34,7 +34,6 @@
 
 use super::partial::PartMeta;
 use reqwest::StatusCode;
-use std::path::PathBuf;
 
 /// What to ask the server for.
 #[derive(Debug, PartialEq)]
@@ -52,8 +51,9 @@ pub(super) fn plan(partial_len: u64, meta: Option<&PartMeta>, url: &str) -> Plan
         return Plan::Fresh;
     }
     match meta {
-        // The partial data belongs to a different download.
-        Some(m) if m.url != url => Plan::Fresh,
+        // The partial data belongs to a different download, or to a segmented one whose
+        // parts are not `name.part`.
+        Some(m) if m.url != url || m.segments.is_some() => Plan::Fresh,
         // More bytes than the file has: it shrank or the partial is corrupt.
         Some(m) if m.total.is_some_and(|total| partial_len > total) => Plan::Fresh,
         Some(m) => Plan::Continue { from: partial_len, if_range: m.validator().map(str::to_string) },
@@ -127,23 +127,6 @@ pub(super) fn interpret(plan: &Plan, status: StatusCode, content_range: Option<&
     }
 }
 
-/// How many bytes of each segment are already on disk (a full part counts as its whole size).
-///
-/// FIXME(B11): parts are validated by size alone; a stale or oversized part is trusted.
-pub(super) fn segment_positions(part_paths: &[PathBuf], ranges: &[(u64, u64)]) -> Vec<u64> {
-    part_paths
-        .iter()
-        .zip(ranges)
-        .map(|(path, &(start, end))| {
-            let expected = end - start + 1;
-            match std::fs::metadata(path) {
-                Ok(m) => m.len().min(expected),
-                Err(_) => 0,
-            }
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,6 +138,7 @@ mod tests {
             etag: etag.map(str::to_string),
             last_modified: last_modified.map(str::to_string),
             total,
+            segments: None,
         }
     }
 
@@ -192,6 +176,13 @@ mod tests {
         );
         let weak_only = meta(URL, Some("W/\"abc\""), None, None);
         assert_eq!(plan(500, Some(&weak_only), URL), Plan::Continue { from: 500, if_range: None });
+    }
+
+    #[test]
+    fn a_segmented_sidecar_never_describes_a_single_part_file() {
+        let mut m = meta(URL, Some("\"a\""), None, Some(1000));
+        m.segments = Some(4);
+        assert_eq!(plan(500, Some(&m), URL), Plan::Fresh);
     }
 
     #[test]
@@ -308,38 +299,5 @@ mod tests {
             let reply = interpret(&cont(from, false), sc(206), Some(&header));
             prop_assert_eq!(matches!(reply, Reply::Append { .. }), start == from);
         }
-    }
-
-    // ---- segments ---------------------------------------------------------------
-
-    fn temp_path(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("rget-resume-{}-{}", std::process::id(), name))
-    }
-
-    #[test]
-    fn segment_positions_of_missing_parts_are_zero() {
-        let ranges = vec![(0, 9), (10, 19)];
-        let paths = vec![temp_path("missing-a"), temp_path("missing-b")];
-        assert_eq!(segment_positions(&paths, &ranges), vec![0, 0]);
-    }
-
-    #[test]
-    fn segment_positions_count_what_is_on_disk() {
-        let full = temp_path("full");
-        let partial = temp_path("partial");
-        std::fs::write(&full, [0u8; 10]).unwrap();
-        std::fs::write(&partial, [0u8; 4]).unwrap();
-        let ranges = vec![(0, 9), (10, 19)];
-        assert_eq!(segment_positions(&[full.clone(), partial.clone()], &ranges), vec![10, 4]);
-        std::fs::remove_file(full).unwrap();
-        std::fs::remove_file(partial).unwrap();
-    }
-
-    #[test]
-    fn segment_positions_never_exceed_the_segment_size() {
-        let oversized = temp_path("oversized");
-        std::fs::write(&oversized, [0u8; 50]).unwrap();
-        assert_eq!(segment_positions(std::slice::from_ref(&oversized), &[(0, 9)]), vec![10]);
-        std::fs::remove_file(oversized).unwrap();
     }
 }

@@ -28,6 +28,9 @@
 //! - `/once/<code>`: that status the first time (with `Retry-After: 1` for 429), then `/file`
 //! - `/long/503`: always 503 with `Retry-After: 300`
 //! - `/dropmid`: the first request promises the whole payload but closes after half, then `/file`
+//! - `/dropseg`: like `/file`, but the first range request that starts in the second half of
+//!   the payload closes the connection after half of its bytes
+//! - `/lying`: advertises `Accept-Ranges: bytes` but answers every request with `200` and the whole payload
 //! - `/trickle`: the payload in ten pieces, 300 ms apart
 //! - `/stall`: half the payload, then silence
 //! - `/guarded`: like `/file`, but 403 unless the request carries `X-Token: ok` and `User-Agent: probe/1`
@@ -171,7 +174,12 @@ fn handle(mut stream: TcpStream, config: &Config, stats: &Stats, seen: &Mutex<Ha
     };
 
     let mut effective = path.as_str();
+    let mut drop_high_range = false;
     match path.as_str() {
+        "/dropseg" => {
+            effective = "/file";
+            drop_high_range = true;
+        }
         "/guarded" => {
             effective = if has("x-token: ok") && has("user-agent: probe/1") { "/file" } else { "/forbidden" };
         }
@@ -210,6 +218,13 @@ fn handle(mut stream: TcpStream, config: &Config, stats: &Stats, seen: &Mutex<Ha
         "/redirect" => respond(&mut stream, "302 Found", "Location: /file\r\n", &[], head_only),
         "/forbidden" => respond(&mut stream, "403 Forbidden", "", b"forbidden", head_only),
         "/long/503" => respond(&mut stream, "503 Test", "Retry-After: 300\r\n", b"later", head_only),
+        "/lying" => respond(
+            &mut stream,
+            "200 OK",
+            &format!("ETag: {}\r\nAccept-Ranges: bytes\r\n", config.etag),
+            payload,
+            head_only,
+        ),
         "/file" => {
             let etag_line = format!("ETag: {}\r\n", config.etag);
             // A validator that no longer matches means: ignore the Range, send everything.
@@ -230,7 +245,17 @@ fn handle(mut stream: TcpStream, config: &Config, stats: &Stats, seen: &Mutex<Ha
                             end,
                             payload.len()
                         );
-                        respond(&mut stream, "206 Partial Content", &extra, &payload[start..=end], head_only);
+                        let body = &payload[start..=end];
+                        if drop_high_range && start >= payload.len() / 2 && times_seen("dropseg") == 1 {
+                            let head = format!(
+                                "HTTP/1.1 206 Partial Content\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            let _ = stream.write_all(head.as_bytes());
+                            let _ = stream.write_all(&body[..body.len() / 2]);
+                            return;
+                        }
+                        respond(&mut stream, "206 Partial Content", &extra, body, head_only);
                     }
                 }
                 _ => {

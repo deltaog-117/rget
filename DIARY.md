@@ -18,6 +18,7 @@
 | 2026-09-20 | `--limit-rate` with `--segments` | Limit applies to the whole download | ✅ Confirmed |
 | 2026-09-20 | Partial downloads and resume validation | `name.part` + `.part.meta` sidecar, `If-Range` | ✅ Confirmed |
 | 2026-09-20 | Retry policy | Classify errors; honour `Retry-After` (cap 60s) | ✅ Confirmed |
+| 2026-09-20 | Segmented parts, validation and merge | Keep part files, sidecar layout check, `io::copy` merge | ✅ Confirmed |
 
 ---
 
@@ -633,6 +634,100 @@ Retried: a stalled transfer, transport errors, and HTTP 408, 425, 429, 500, 502,
 #### References
 
 - `ROADMAP.md`, item A6
+
+---
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-09-20 | Initial entry | deltaog-117 |
+
+---
+
+### Segmented Downloads: Parts, Validation and Merge
+
+**Date:** 2026-09-20
+**Status:** Confirmed
+
+---
+
+#### Context / Background
+
+Three roadmap items touched the same code: B8 (a failed segment failed the whole download and the Cycle 2 retry policy was not used), B9 (the merge read each part fully into memory) and B11 (parts were trusted by size alone, and leftovers piled up). Re-reading the worker turned up more defects in the same place: a `200` answer to a ranged request was accepted, the `Content-Range` offset and final length were never checked, "ranges unsupported" was detected by searching an error *message*, the layout of the parts was not recorded (so a different `--segments` misaligned every part), oversized parts were trusted, and a file smaller than the segment count panicked.
+
+---
+
+#### Options Considered
+
+**Option A: Keep the part files, stream the merge, extend the sidecar with the layout**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Small and safe <br> • Fixes every listed defect <br> • `io::copy` between files is done in the kernel on Linux <br> • Disk use stays at about the file size plus one part, because each part is deleted once merged |
+| **Disadvantages** | • One extra pass over the data at the end |
+| **Implementation Difficulty** | Medium |
+| **Fit with Constraints** | Best |
+
+**Option B: One preallocated `name.part`, workers `write_at` their ranges, progress checkpoints in the sidecar**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • No merge pass and no second write of the data |
+| **Disadvantages** | • Checkpointing and fsync ordering <br> • Unix-only `write_at` <br> • A sparse, full-length `.part` looks *complete* to a single-connection resume or another tool, which is a corruption hazard |
+| **Implementation Difficulty** | Hard |
+| **Fit with Constraints** | Poor for the saving it buys |
+
+**Option C: Only retries and `io::copy`, no sidecar**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Smallest change |
+| **Disadvantages** | • A changed file across runs still corrupts <br> • A different `--segments` still misaligns the parts |
+| **Implementation Difficulty** | Easy |
+| **Fit with Constraints** | Leaves B11 undone |
+
+---
+
+#### Decision & Rationale
+
+**Chosen Option:** A
+
+**Reasoning:**
+
+Before choosing, the two merges were measured on 4 parts of 128 MiB (tmpfs): reading each part into a `Vec` peaked at 133 MB and took 1.3s; `io::copy` peaked at 2.4 MB and took 0.57s. The cost of A is one pass the measurement shows to be cheap, whereas B adds real hazards for a saving that matters only on very large files. It can be revisited if the merge ever shows up as a bottleneck.
+
+**Results measured afterwards:** a real 400 MiB download with 4 segments over loopback went from 127 MB peak memory and 1.4s to 34 MB and 0.9s, with an identical 419,430,400-byte result. The 90-case end-to-end comparison against the previous build changed only in the eight new cases; all 82 existing ones were byte-identical. The results in the changed cases were checked against independently computed hashes.
+
+**Rules implemented:**
+- The sidecar gains a `segments` field and is written once, after the probe and before the workers start. A resume is accepted only when the URL, total size and segment count match and the file is unchanged (same strong ETag, else same Last-Modified). Weak ETags cannot prove byte identity and are ignored. Otherwise every part is discarded and the download starts over.
+- With no sidecar (parts from 1.0.0, say) the parts are accepted as unvalidated prefixes, the same rule as a single-connection resume. A single-connection sidecar never validates segmented parts, and a segmented sidecar never validates a single `name.part`.
+- A `200` to a ranged request, a `416`, or a `Content-Range` at the wrong offset becomes a typed `Error::RangesUnsupported`, which is never retried and makes the download fall back to one connection. This replaces matching on an error message.
+- Each segment retries on its own with the Cycle 2 policy and continues from whatever its part file holds. The bar counts each byte once.
+- Every part is length-checked before any is merged; a wrong-sized part is deleted so the next run fetches it again.
+- Parts beyond the current segment count and parts longer than their range are deleted.
+- The download returns the failing segment's own error, and keeps the parts and sidecar so `-c` can continue.
+- There are never more segments than bytes (`plan_ranges` clamps), which removes the underflow.
+
+**Trade-offs accepted:**
+- One extra pass over the data at the end.
+- When a segment fails for good the other segments keep downloading until they finish. Their parts stay resumable, so nothing is lost, but bandwidth is wasted; a shared cancel flag is on the roadmap as D10.
+- A server that answers `206` to an `If-Range` it should have rejected cannot be detected.
+
+---
+
+#### Implementation Notes
+
+- New `parts.rs` holds the pure and file-level logic (planning, discovery, cleanup, reconciliation, resume validation, merge) with unit and property tests; `segmented.rs` is orchestration only.
+- The test server gained `/dropseg` (the first range request in the second half dies mid-body) and `/lying` (advertises ranges, answers `200`).
+- Mutation-checked: allowing every resume, keeping leftover parts, accepting a `200`, disabling per-segment retries, keeping oversized parts, and skipping the length check before merging each made a specific test fail. Two of my first mutation runs tested nothing (an unsupported `a|b` filter, and a redundant defence in the worker that let one mutation survive at integration level), so the runs were repeated with correct filters and a unit-level check.
+
+---
+
+#### References
+
+- `$SUITE/2engineering.md` (pillars 1, 2 and 4), `$SUITE/4iteration.md`
+- `ROADMAP.md`, items B8, B9, B11
 
 ---
 

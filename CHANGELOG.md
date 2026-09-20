@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Resume validation with `If-Range`: a partial download is only continued when the remote file is unchanged
 - `Retry-After` support (seconds or HTTP-date), and a retry policy that distinguishes transient from permanent failures
 - Tests for the resume state machine and retry policy (property tests and a decision table), integration tests for ETag changes, dropped connections, `Retry-After`, and symlinked and device outputs
+- Segmented downloads record their layout (segment count, size, validators) in the `name.part.meta` sidecar and validate it on resume; segment requests carry `If-Range`
+- Tests for segment planning and resume validation (property tests), and integration tests for dropped segments, servers that ignore ranges, changed files and changed segment counts
 
 ### Changed
 - Restructured the source tree from a flat `src/` into a feature-first layout: `app/` (CLI, config, settings merge, wiring), `features/{download,validation,integrity,input,destination}/`, and `shared/` (progress bar, size parsing). `main.rs` is now a thin entry point. No user-visible behaviour change; verified identical to 1.0.0 across 65 end-to-end cases.
@@ -34,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Retries within a run continue from the bytes the previous attempt wrote (when the server supports ranges) instead of starting over
 - Only transient failures are retried: timeouts, connection errors, and HTTP 408, 425, 429, 500, 502, 503 and 504. Other errors (404, a full disk, a disabled redirect) now fail at once; the backoff is capped at 60s
 - The benchmark now writes to a real file, so the staging and rename are included in what it measures
+- Each segment of a segmented download retries independently with the same policy as a single connection (including `Retry-After`), continuing from the bytes its part file already holds; retry messages are labelled `part N:`
+- Segmented downloads merge their parts with `io::copy` instead of reading each part into memory; every part is length-checked before any of them is merged
+- A segmented resume (`-c`) is accepted only when the URL, size, segment count and remote file are unchanged; otherwise rget says "Existing parts do not match the remote file, starting from scratch". Parts without a sidecar (from 1.0.0, for instance) are still accepted as unvalidated prefixes
+- When a segment fails for good, the download now fails with that segment's own error (it used to print a debug dump such as `1 segments failed: [Network(reqwest::Error { … })]`), and the parts and sidecar are kept so `-c` can continue
+- Parts beyond the current segment count, and parts longer than their range, are deleted instead of being trusted
 
 ### Fixed
 - Downloads no longer buffer the whole file in memory: the body is streamed through a single 64 KiB buffer (a 400 MiB download peaked at 437 MB before and 24 MB now)
@@ -46,6 +53,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A failed re-download no longer destroys an existing file, and a stalled or interrupted one no longer leaves partial data under the final name
 - A `Retry-After` from the server is honoured instead of being ignored, and a very large `-r` no longer overflows the backoff
 - The progress bar on a resumed download now shows the full file size
+- Segmented downloads no longer hold a whole part in memory while merging (a 400 MiB, 4-segment download peaked at 127 MB before and 34 MB now)
+- A server that advertises ranges but answers `200` no longer has its whole body written into every part (a 300 KB file used to come out as 900 KB); rget falls back to a single connection
+- A file smaller than the segment count no longer panics (and hangs): there are never more segments than bytes
+- Resuming a segmented download with a different `--segments`, or after the remote file changed, no longer merges misaligned or mismatched parts into a corrupt file
+- An oversized leftover part no longer makes the merged file too long
+- A segment that was refused ranges no longer prints a spurious "Failed after 1 attempts" before the fallback succeeds
 - Segmented downloads from servers that require custom headers or a User-Agent on `HEAD` are now actually segmented instead of silently falling back to one connection
 
 ---

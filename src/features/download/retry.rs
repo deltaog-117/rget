@@ -35,7 +35,10 @@ pub(super) fn is_retryable(error: &Error) -> bool {
         Error::HttpStatus { status, .. } => {
             matches!(status.as_u16(), 408 | 425 | 429 | 500 | 502 | 503 | 504)
         }
-        Error::Io(_) | Error::RedirectDisabled(..) | Error::ProtocolError(_) => false,
+        Error::Io(_)
+        | Error::RedirectDisabled(..)
+        | Error::ProtocolError(_)
+        | Error::RangesUnsupported(_) => false,
     }
 }
 
@@ -71,8 +74,9 @@ fn next_delay(attempt: u32, jitter_ms: u64, retry_after: Option<Duration>) -> Op
 }
 
 /// Runs `attempt_fn` (given the zero-based attempt number) until it succeeds, fails with
-/// an error that is not worth retrying, or `retries + 1` attempts have failed.
-pub(super) fn run<F>(retries: u32, quiet: bool, mut attempt_fn: F) -> Result<()>
+/// an error that is not worth retrying, or `retries + 1` attempts have failed. `label`
+/// prefixes every message, so concurrent segments can be told apart.
+pub(super) fn run<F>(retries: u32, quiet: bool, label: &str, mut attempt_fn: F) -> Result<()>
 where
     F: FnMut(usize) -> Result<()>,
 {
@@ -89,8 +93,9 @@ where
         };
 
         if attempt >= max_attempts || !is_retryable(&e) {
-            if !quiet {
-                eprintln!("❌ Failed after {} attempts", attempt);
+            // "Ranges unsupported" is not a failure: the caller falls back to one connection.
+            if !quiet && !matches!(e, Error::RangesUnsupported(_)) {
+                eprintln!("❌ {}Failed after {} attempts", label, attempt);
             }
             return Err(e);
         }
@@ -100,7 +105,8 @@ where
             Some(delay) => {
                 if !quiet {
                     eprintln!(
-                        "⚠️  Attempt {} failed: {}. Retrying in {}s...",
+                        "⚠️  {}Attempt {} failed: {}. Retrying in {}s...",
+                        label,
                         attempt,
                         e,
                         delay.as_secs()
@@ -111,7 +117,8 @@ where
             None => {
                 if !quiet {
                     eprintln!(
-                        "⚠️  Attempt {} failed: {}. The server asked to wait longer than {}s; giving up.",
+                        "⚠️  {}Attempt {} failed: {}. The server asked to wait longer than {}s; giving up.",
+                        label,
                         attempt,
                         e,
                         MAX_WAIT.as_secs()
@@ -152,6 +159,7 @@ mod tests {
         assert!(!is_retryable(&Error::Io(std::io::Error::other("disk full"))));
         assert!(!is_retryable(&Error::RedirectDisabled(302, "/x".into())));
         assert!(!is_retryable(&Error::ProtocolError("bad".into())));
+        assert!(!is_retryable(&Error::RangesUnsupported("200".into())));
     }
 
     #[test]
@@ -235,7 +243,7 @@ mod tests {
     #[test]
     fn success_on_first_attempt_runs_once() {
         let mut calls = 0;
-        let result = run(3, true, |_| {
+        let result = run(3, true, "", |_| {
             calls += 1;
             Ok(())
         });
@@ -246,7 +254,7 @@ mod tests {
     #[test]
     fn zero_retries_means_a_single_attempt() {
         let mut calls = 0;
-        let result = run(0, true, |_| {
+        let result = run(0, true, "", |_| {
             calls += 1;
             Err(Error::Stalled(1))
         });
@@ -257,7 +265,7 @@ mod tests {
     #[test]
     fn a_permanent_error_is_not_retried_even_when_retries_remain() {
         let mut calls = 0;
-        let result = run(5, true, |_| {
+        let result = run(5, true, "", |_| {
             calls += 1;
             Err(status(404))
         });
@@ -268,7 +276,7 @@ mod tests {
     #[test]
     fn a_transient_error_is_retried_and_the_attempt_number_is_passed_on() {
         let mut seen = Vec::new();
-        let result = run(1, true, |attempt| {
+        let result = run(1, true, "", |attempt| {
             seen.push(attempt);
             if attempt == 0 { Err(Error::Stalled(1)) } else { Ok(()) }
         });

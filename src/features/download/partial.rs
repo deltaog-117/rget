@@ -131,12 +131,27 @@ pub(super) struct PartMeta {
     pub(super) etag: Option<String>,
     pub(super) last_modified: Option<String>,
     pub(super) total: Option<u64>,
+    /// Number of `name.partN` files for a segmented download; `None` for a single connection.
+    /// A resume needs the same count, because the byte range of each part depends on it.
+    #[serde(default)]
+    pub(super) segments: Option<usize>,
 }
 
 impl PartMeta {
     pub(super) fn from_headers(url: &str, headers: &HeaderMap, total: Option<u64>) -> Self {
         let text = |name| headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
-        Self { url: url.to_string(), etag: text(ETAG), last_modified: text(LAST_MODIFIED), total }
+        Self {
+            url: url.to_string(),
+            etag: text(ETAG),
+            last_modified: text(LAST_MODIFIED),
+            total,
+            segments: None,
+        }
+    }
+
+    pub(super) fn with_segments(mut self, segments: usize) -> Self {
+        self.segments = Some(segments);
+        self
     }
 
     /// Keeps the validators of `earlier` when a `206` response leaves them out.
@@ -299,11 +314,12 @@ mod tests {
             etag: Some("\"abc\"".into()),
             last_modified: Some("Wed, 01 Jan 2025 00:00:00 GMT".into()),
             total: Some(123),
+            segments: Some(4),
         };
         full.write(&path).unwrap();
         assert_eq!(PartMeta::read(&path), Some(full));
 
-        let bare = PartMeta { url: "http://h/y".into(), etag: None, last_modified: None, total: None };
+        let bare = PartMeta { url: "http://h/y".into(), etag: None, last_modified: None, total: None, segments: None };
         bare.write(&path).unwrap();
         assert_eq!(PartMeta::read(&path), Some(bare));
         fs::remove_dir_all(dir).unwrap();
@@ -321,8 +337,8 @@ mod tests {
 
     #[test]
     fn a_206_that_omits_validators_inherits_the_earlier_ones() {
-        let earlier = PartMeta { url: "http://h/x".into(), etag: Some("\"e\"".into()), last_modified: None, total: Some(10) };
-        let new = PartMeta { url: "http://h/x".into(), etag: None, last_modified: None, total: Some(10) };
+        let earlier = PartMeta { url: "http://h/x".into(), etag: Some("\"e\"".into()), last_modified: None, total: Some(10), segments: None };
+        let new = PartMeta { url: "http://h/x".into(), etag: None, last_modified: None, total: Some(10), segments: None };
         assert_eq!(new.clone().inherit(Some(&earlier)).etag.as_deref(), Some("\"e\""));
         let other_url = PartMeta { url: "http://h/other".into(), ..new };
         assert_eq!(other_url.inherit(Some(&earlier)).etag, None);

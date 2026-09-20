@@ -43,6 +43,12 @@ pub enum Error {
 
     #[error("Timed out: no data received for {0}s")]
     Stalled(u64),
+
+    /// A segmented download found that the server does not honour byte ranges after all
+    /// (it answered `200`, `416`, or the wrong `Content-Range`). The caller falls back to a
+    /// single connection.
+    #[error("Server does not honour range requests: {0}")]
+    RangesUnsupported(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

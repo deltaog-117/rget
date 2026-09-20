@@ -24,6 +24,7 @@
 mod client;
 mod error;
 mod options;
+mod parts;
 mod partial;
 mod pool;
 mod resume;
@@ -66,7 +67,7 @@ fn download_single(
     options: &DownloadOptions,
     multi_progress: Option<&MultiProgress>,
 ) -> Result<()> {
-    retry::run(options.retries, options.quiet, |attempt| {
+    retry::run(options.retries, options.quiet, "", |attempt| {
         single::attempt(url, output_path, options, attempt, multi_progress)
     })
 }

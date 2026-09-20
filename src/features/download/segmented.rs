@@ -17,68 +17,132 @@
 
 
 //! Segmented (multi-connection) download of a single file.
+//!
+//! The remote file is split into byte ranges, each fetched by its own worker into
+//! `name.part<i>`; the parts are then merged into `name.part` and renamed into place. A
+//! sidecar (`name.part.meta`) records the layout and the remote file's validators, so an
+//! interrupted download resumes only when it is safe (see [`parts::resume_allowed`]).
 
 use super::client;
 use super::error::{Error, Result};
 use super::options::DownloadOptions;
-use super::partial::Target;
-use super::resume;
+use super::parts;
+use super::partial::{PartMeta, Target};
+use super::resume::parse_content_range;
+use super::retry;
 use super::stream;
 use super::throttle::Throttle;
 use crate::shared::progress::ProgressBarWrapper;
-use indicatif::MultiProgress;
-use reqwest::header::{ACCEPT_RANGES, RANGE};
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use indicatif::{MultiProgress, ProgressBar};
+use reqwest::header::{ACCEPT_RANGES, CONTENT_RANGE, IF_RANGE, RANGE};
+use reqwest::StatusCode;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::thread;
 
-/// Splits `total_size` bytes into `segments` inclusive `(start, end)` ranges;
-/// the last range absorbs the remainder.
-///
-/// FIXME(B): underflows when `total_size < segments` (`part_size` is 0).
-fn plan_ranges(total_size: u64, segments: usize) -> Vec<(u64, u64)> {
-    let part_size = total_size / segments as u64;
-    let mut ranges = Vec::with_capacity(segments);
-    let mut start = 0;
-    for i in 0..segments {
-        let end = if i == segments - 1 {
-            total_size - 1
-        } else {
-            start + part_size - 1
-        };
-        if start >= total_size {
-            break;
-        }
-        ranges.push((start, end));
-        start = end + 1;
+/// What every worker needs, shared between them.
+struct Shared {
+    url: String,
+    timeout: u64,
+    follow_redirects: bool,
+    user_agent: Option<String>,
+    headers: Vec<(String, String)>,
+    /// Validator from the probe, so a file that changes mid-download is noticed.
+    if_range: Option<String>,
+    limit: Option<usize>,
+    retries: u32,
+    quiet: bool,
+    progress: Option<ProgressBar>,
+}
+
+/// One attempt at one segment. Continues from whatever the part file already holds, so a
+/// retry (or a resume) only asks for the missing bytes.
+fn fetch_segment(shared: &Shared, index: usize, part_path: &Path, (start, end): (u64, u64)) -> Result<()> {
+    let expected = end - start + 1;
+    let mut have = fs::metadata(part_path).map(|m| m.len()).unwrap_or(0);
+    if have > expected {
+        let _ = fs::remove_file(part_path);
+        have = 0;
     }
-    ranges
-}
+    if have == expected {
+        return Ok(());
+    }
 
-/// Splits `--limit-rate` across the segments so the limit holds for the whole download.
-/// `0` (unlimited) stays unlimited, and no segment is ever starved down to zero.
-fn per_segment_limit(limit: Option<usize>, segments: usize) -> Option<usize> {
-    limit.map(|l| if l == 0 { 0 } else { (l / segments.max(1)).max(1) })
-}
+    let first = start + have;
+    let client = client::build(shared.timeout, shared.follow_redirects)?;
+    let mut request_builder = client.get(&shared.url).header(RANGE, format!("bytes={}-{}", first, end));
+    if let Some(validator) = &shared.if_range {
+        request_builder = request_builder.header(IF_RANGE, validator);
+    }
+    let request_builder =
+        client::apply_headers(request_builder, shared.user_agent.as_deref(), &shared.headers);
 
-/// Concatenates the part files into `output_path`, deleting each part as it is consumed.
-///
-/// FIXME(B9): reads each part fully into memory before writing it.
-fn merge_parts(output_path: &Path, part_paths: &[PathBuf]) -> Result<()> {
-    let mut output_file = File::create(output_path)?;
-    for part_path in part_paths {
-        if !part_path.exists() {
-            return Err(Error::ProtocolError(format!(
-                "Part file {} missing",
-                part_path.display()
+    let response = request_builder.send()?;
+    if response.status() == StatusCode::RANGE_NOT_SATISFIABLE {
+        return Err(Error::RangesUnsupported(format!(
+            "part {}: 416 for bytes {}-{}",
+            index, first, end
+        )));
+    }
+    let mut response = client::ensure_success(response)?;
+
+    match response.status().as_u16() {
+        206 => {
+            let at_offset = response
+                .headers()
+                .get(CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(parse_content_range)
+                .is_some_and(|cr| cr.range.is_some_and(|(s, _)| s == first));
+            if !at_offset {
+                return Err(Error::RangesUnsupported(format!(
+                    "part {}: the reply does not start at byte {}",
+                    index, first
+                )));
+            }
+        }
+        // The whole file instead of a range: the server ignores `Range`, or the validator
+        // no longer matches. Either way the parts cannot be trusted.
+        200 => {
+            return Err(Error::RangesUnsupported(format!(
+                "part {}: answered 200 to a range request",
+                index
             )));
         }
-        let mut part_file = File::open(part_path)?;
-        let mut buffer = Vec::new();
-        part_file.read_to_end(&mut buffer)?;
-        output_file.write_all(&buffer)?;
-        let _ = std::fs::remove_file(part_path);
+        _ => {
+            return Err(Error::ProtocolError(format!(
+                "Unexpected status code: {}",
+                response.status()
+            )));
+        }
+    }
+
+    let mut file = if have > 0 {
+        OpenOptions::new().append(true).create(true).open(part_path)?
+    } else {
+        OpenOptions::new().write(true).create(true).truncate(true).open(part_path)?
+    };
+
+    let mut throttle = Throttle::new(shared.limit);
+    let written = stream::copy(&mut response, &mut file, &mut throttle, shared.timeout, |n| {
+        if let Some(ref bar) = shared.progress {
+            bar.inc(n);
+        }
+    })?;
+    log::debug!("part {} wrote {} bytes", index, written);
+
+    if have + written != expected {
+        return Err(Error::ProtocolError(format!(
+            "part {} ended after {} of {} bytes",
+            index,
+            have + written,
+            expected
+        )));
+    }
+
+    if !shared.quiet {
+        eprintln!("✅ Part {} complete", index);
     }
     Ok(())
 }
@@ -152,7 +216,7 @@ pub(super) fn download(
         return super::download_single(url, output_path, options, multi_progress);
     }
 
-    let ranges = plan_ranges(total_size, segments);
+    let ranges = parts::plan_ranges(total_size, segments);
 
     for (i, (start, end)) in ranges.iter().enumerate() {
         log::debug!("range {}: {}-{} (length: {})", i, start, end, end - start + 1);
@@ -161,29 +225,39 @@ pub(super) fn download(
     if ranges.is_empty() {
         if !quiet {
             eprintln!("⚠️  Invalid range calculation; falling back to single-thread.");
-            eprintln!(
-                "   (total_size={}, segments={}, part_size={})",
-                total_size,
-                segments,
-                total_size / segments as u64
-            );
         }
         return super::download_single(url, output_path, options, multi_progress);
     }
 
-    let part_paths: Vec<PathBuf> = (0..ranges.len())
-        .map(|i| PathBuf::from(format!("{}.part{}", output_path, i)))
-        .collect();
+    // What the probe says the remote file is, and the layout we are about to use.
+    let target = Target::resolve(output_path);
+    let current = PartMeta::from_headers(url, head_response.headers(), Some(total_size))
+        .with_segments(ranges.len());
+    let saved = PartMeta::read(target.meta_path());
 
-    let resume_positions = if options.resume {
-        resume::segment_positions(&part_paths, &ranges)
+    let resuming = options.resume && parts::resume_allowed(saved.as_ref(), &current);
+    if options.resume && !resuming && !quiet {
+        eprintln!("Existing parts do not match the remote file, starting from scratch");
+    }
+    // Parts from a run we will not continue, and leftovers beyond the current count.
+    parts::discard_parts(output_path, if resuming { ranges.len() } else { 0 });
+
+    let part_paths: Vec<PathBuf> = (0..ranges.len()).map(|i| parts::part_path(output_path, i)).collect();
+    let positions = if resuming {
+        parts::reconcile(&part_paths, &ranges)
     } else {
         vec![0u64; ranges.len()]
     };
 
+    if target.is_staged() {
+        if let Err(e) = current.write(target.meta_path()) {
+            // Only costs the ability to validate a later resume.
+            log::debug!("could not write {}: {}", target.meta_path().display(), e);
+        }
+    }
+
     let progress = if !quiet {
-        let downloaded: u64 = if options.resume { resume_positions.iter().sum() } else { 0 };
-        let wrapper = ProgressBarWrapper::new(total_size, downloaded);
+        let wrapper = ProgressBarWrapper::new(total_size, positions.iter().sum());
         if let Some(mp) = multi_progress {
             mp.add(wrapper.get_bar().clone());
         }
@@ -191,134 +265,72 @@ pub(super) fn download(
     } else {
         None
     };
-    let segment_limit = per_segment_limit(options.limit_rate, ranges.len());
 
-    let mut handles = Vec::with_capacity(ranges.len());
-    for i in 0..ranges.len() {
-        let url = url.to_string();
-        let part_path = part_paths[i].clone();
-        let (start, end) = ranges[i];
-        if start > end || start >= total_size {
-            continue;
-        }
-        let user_agent = options.user_agent.clone();
-        let timeout = options.timeout;
-        let follow_redirects = options.follow_redirects;
-        let progress_bar = progress.as_ref().map(|p| p.get_bar().clone());
-        let resume_pos = resume_positions[i];
-        let headers = options.headers.clone();
+    let shared = Arc::new(Shared {
+        url: url.to_string(),
+        timeout: options.timeout,
+        follow_redirects: options.follow_redirects,
+        user_agent: options.user_agent.clone(),
+        headers: options.headers.clone(),
+        if_range: current.validator().map(str::to_string),
+        limit: parts::per_segment_limit(options.limit_rate, ranges.len()),
+        retries: options.retries,
+        quiet,
+        progress: progress.as_ref().map(|p| p.get_bar().clone()),
+    });
 
-        let handle = thread::spawn(move || -> Result<()> {
-            let client = client::build(timeout, follow_redirects)?;
+    let handles: Vec<_> = ranges
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(i, range)| {
+            let shared = Arc::clone(&shared);
+            let part_path = part_paths[i].clone();
+            thread::spawn(move || {
+                let label = format!("part {}: ", i);
+                retry::run(shared.retries, shared.quiet, &label, |_attempt| {
+                    fetch_segment(&shared, i, &part_path, range)
+                })
+            })
+        })
+        .collect();
 
-            let mut request_builder = client.get(&url);
-            if resume_pos > 0 {
-                let new_start = start + resume_pos;
-                if new_start <= end {
-                    request_builder = request_builder.header(RANGE, format!("bytes={}-{}", new_start, end));
-                } else {
-                    return Ok(());
-                }
-            } else {
-                request_builder = request_builder.header(RANGE, format!("bytes={}-{}", start, end));
-            }
-
-            let request_builder =
-                client::apply_headers(request_builder, user_agent.as_deref(), &headers);
-
-            let mut response = request_builder.send()?;
-
-            if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
-                return Err(Error::ProtocolError(format!(
-                    "Range not satisfiable: {}-{} (total: {})",
-                    start, end, total_size
-                )));
-            }
-
-            if response.status() != reqwest::StatusCode::PARTIAL_CONTENT
-                && response.status() != reqwest::StatusCode::OK
-            {
-                return Err(Error::ProtocolError(format!(
-                    "Unexpected status code: {}",
-                    response.status()
-                )));
-            }
-
-            let mut file = if resume_pos > 0 {
-                OpenOptions::new()
-                    .append(true)
-                    .create(true)
-                    .open(&part_path)?
-            } else {
-                OpenOptions::new()
-                    .write(true)
-                    .create(true)
-                    .truncate(true)
-                    .open(&part_path)?
-            };
-
-            let mut throttle = Throttle::new(segment_limit);
-            let written = stream::copy(&mut response, &mut file, &mut throttle, timeout, |n| {
-                if let Some(ref bar) = progress_bar {
-                    bar.inc(n);
-                }
-            })?;
-            log::debug!("part {} wrote {} bytes", i, written);
-
-            if !quiet {
-                eprintln!("✅ Part {} complete", i);
-            }
-            Ok(())
-        });
-
-        handles.push(handle);
-    }
-
-    let mut error_count = 0;
-    let mut thread_errors = Vec::new();
-    for handle in handles {
+    let mut ranges_unsupported = false;
+    let mut first_error: Option<Error> = None;
+    for (i, handle) in handles.into_iter().enumerate() {
         match handle.join() {
-            Ok(Ok(())) => { /* ok */ }
+            Ok(Ok(())) => {}
+            Ok(Err(Error::RangesUnsupported(reason))) => {
+                log::debug!("{}", reason);
+                ranges_unsupported = true;
+            }
             Ok(Err(e)) => {
-                eprintln!("❌ Thread error: {}", e);
-                error_count += 1;
-                thread_errors.push(e);
+                eprintln!("❌ Part {}: {}", i, e);
+                first_error.get_or_insert(e);
             }
             Err(_) => {
-                eprintln!("❌ Thread panicked!");
-                error_count += 1;
+                eprintln!("❌ Part {}: worker thread panicked", i);
+                first_error.get_or_insert(Error::ProtocolError(format!("part {} worker thread panicked", i)));
             }
         }
     }
 
-    if error_count > 0 {
-        let all_416 = thread_errors.iter().all(|e| {
-            if let Error::ProtocolError(msg) = e {
-                msg.contains("Range not satisfiable")
-            } else {
-                false
-            }
-        });
-        if all_416 {
-            if !quiet {
-                eprintln!("⚠️  Server rejected byte ranges; falling back to single-thread.");
-            }
-            for path in &part_paths {
-                let _ = std::fs::remove_file(path);
-            }
-            return super::download_single(url, output_path, options, multi_progress);
-        } else {
-            return Err(Error::ProtocolError(format!(
-                "{} segments failed: {:?}",
-                error_count,
-                thread_errors
-            )));
+    if ranges_unsupported {
+        if !quiet {
+            eprintln!("⚠️  Server rejected byte ranges; falling back to single-thread.");
         }
+        parts::discard_parts(output_path, 0);
+        let _ = fs::remove_file(target.meta_path());
+        return super::download_single(url, output_path, options, multi_progress);
+    }
+
+    // The parts and the sidecar stay on disk, so `-c` can continue from them.
+    if let Some(e) = first_error {
+        return Err(e);
     }
 
     // The merged file is staged as `name.part` and renamed, like a single-connection download.
-    let target = Target::resolve(output_path);
-    merge_parts(target.work_path(), &part_paths)?;
+    parts::merge_parts(target.work_path(), &part_paths, &ranges)?;
     target.finish()?;
 
     if let Some(p) = progress {
@@ -330,48 +342,4 @@ pub(super) fn download(
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ranges_cover_the_file_exactly_once() {
-        for (total, segments) in [(100u64, 4usize), (3_000_017, 4), (3_000_017, 7), (10, 3), (5, 5)] {
-            let ranges = plan_ranges(total, segments);
-            assert_eq!(ranges.len(), segments);
-            assert_eq!(ranges[0].0, 0);
-            assert_eq!(ranges.last().unwrap().1, total - 1);
-            for pair in ranges.windows(2) {
-                assert_eq!(pair[0].1 + 1, pair[1].0);
-            }
-        }
-    }
-
-    #[test]
-    fn the_last_range_absorbs_the_remainder() {
-        assert_eq!(
-            plan_ranges(3_000_017, 4),
-            vec![(0, 750_003), (750_004, 1_500_007), (1_500_008, 2_250_011), (2_250_012, 3_000_016)]
-        );
-    }
-
-    #[test]
-    fn the_limit_is_shared_between_segments() {
-        assert_eq!(per_segment_limit(Some(4_000_000), 4), Some(1_000_000));
-        assert_eq!(per_segment_limit(Some(1_000_000), 1), Some(1_000_000));
-    }
-
-    #[test]
-    fn unlimited_stays_unlimited_and_no_segment_is_starved() {
-        assert_eq!(per_segment_limit(None, 4), None);
-        assert_eq!(per_segment_limit(Some(0), 4), Some(0));
-        assert_eq!(per_segment_limit(Some(3), 8), Some(1));
-    }
-
-    #[test]
-    fn a_single_segment_is_the_whole_file() {
-        assert_eq!(plan_ranges(42, 1), vec![(0, 41)]);
-    }
 }

@@ -105,6 +105,7 @@ While a download runs, its data lives in `large-file.iso.part` (plus a small `la
 ```bash
 rget --segments 4 https://example.com/large-file.iso
 ```
+Each segment is a separate connection, retried on its own (`-r`), and stored as `large-file.iso.part0`, `.part1`, … until they are merged. If the download is interrupted, run the same command with `-c` to continue: the parts are reused only when the remote file and the segment count are unchanged, otherwise rget starts over. `--limit-rate` applies to the download as a whole.
 
 ### Download multiple URLs in parallel
 ```bash
