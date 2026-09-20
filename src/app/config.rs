@@ -16,6 +16,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
+//! On-disk configuration (`~/.config/rget/config.toml`).
+
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;

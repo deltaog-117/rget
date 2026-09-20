@@ -16,6 +16,17 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-fn main() -> rget::app::Result<()> {
-    rget::app::run()
+//! Errors raised while validating a URL.
+
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("Invalid URL: {0}")]
+    InvalidUrl(String),
+
+    #[error("Blocked URL: {0}")]
+    BlockedUrl(String),
 }
+
+pub type Result<T> = std::result::Result<T, Error>;

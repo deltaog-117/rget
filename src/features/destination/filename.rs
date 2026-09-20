@@ -16,31 +16,20 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-use std::fs::File;
-use std::io::Read;
-use sha2::{Sha256, Digest};
+//! Choosing a file name.
 
-pub fn compute_sha256(file_path: &str) -> Result<String, std::io::Error> {
-    let mut file = File::open(file_path)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0; 8192];
-    loop {
-        let n = file.read(&mut buffer)?;
-        if n == 0 { break; }
-        hasher.update(&buffer[..n]);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
-}
+use url::Url;
 
-pub fn verify_sha256(file_path: &str, expected: &str) -> Result<(), super::error::RgetError> {
-    let actual = compute_sha256(file_path)
-        .map_err(super::error::RgetError::Io)?;
-    if actual == expected {
-        Ok(())
+/// Uses `explicit` (`-O`) when given, otherwise the last path segment of `url`,
+/// falling back to `"downloaded"` when the path has no file name.
+pub fn file_name_for(url: &Url, explicit: Option<&str>) -> String {
+    if let Some(name) = explicit {
+        name.to_string()
     } else {
-        Err(super::error::RgetError::ChecksumMismatch {
-            expected: expected.to_string(),
-            actual,
-        })
+        url.path_segments()
+            .and_then(|mut segments| segments.next_back())
+            .filter(|&name| !name.is_empty())
+            .unwrap_or("downloaded")
+            .to_string()
     }
 }

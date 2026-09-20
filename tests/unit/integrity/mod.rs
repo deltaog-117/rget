@@ -16,6 +16,4 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-fn main() -> rget::app::Result<()> {
-    rget::app::run()
-}
+mod sha256;

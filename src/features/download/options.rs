@@ -16,6 +16,18 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-fn main() -> rget::app::Result<()> {
-    rget::app::run()
+//! Everything a download needs besides the URL and the destination.
+
+/// Per-download settings, resolved once by the caller.
+#[derive(Debug, Clone)]
+pub struct DownloadOptions {
+    pub resume: bool,
+    pub timeout: u64,
+    pub follow_redirects: bool,
+    pub user_agent: Option<String>,
+    pub retries: u32,
+    pub quiet: bool,
+    pub limit_rate: Option<usize>,
+    pub segments: usize,
+    pub headers: Vec<(String, String)>,
 }

@@ -16,6 +16,23 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-fn main() -> rget::app::Result<()> {
-    rget::app::run()
+//! Errors raised while fetching a file.
+
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("Network error: {0}")]
+    Network(#[from] reqwest::Error),
+
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Redirect disabled but server returned redirect {0} to {1}")]
+    RedirectDisabled(u16, String),
+
+    #[error("Protocol error: {0}")]
+    ProtocolError(String),
 }
+
+pub type Result<T> = std::result::Result<T, Error>;

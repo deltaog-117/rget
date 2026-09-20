@@ -16,6 +16,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-fn main() -> rget::app::Result<()> {
-    rget::app::run()
-}
+//! Destination: where does the downloaded file go?
+
+mod filename;
+mod location;
+
+pub use filename::file_name_for;
+pub use location::{default_download_dir, output_path};

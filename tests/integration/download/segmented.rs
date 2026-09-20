@@ -1,0 +1,74 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// rget - A safe, modern downloader for Linux
+// Copyright (C) 2026  Aeon Ennoia
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
+use super::{options, payload, scratch_dir, serve};
+use rget::features::download::download_file;
+
+fn leftover_parts(dir: &std::path::Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.contains(".part"))
+        .collect()
+}
+
+#[test]
+fn segments_are_reassembled_in_order() {
+    for segments in [2usize, 4, 7] {
+        let data = payload(300_017);
+        let base = serve(data.clone(), true);
+        let dir = scratch_dir(&format!("seg-{segments}"));
+        let out = dir.join("out.bin");
+        let mut opts = options();
+        opts.segments = segments;
+
+        download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
+
+        assert_eq!(std::fs::read(&out).unwrap(), data, "segments = {segments}");
+        assert!(leftover_parts(&dir).is_empty(), "part files were not cleaned up");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn a_server_without_range_support_falls_back_to_one_connection() {
+    let data = payload(50_000);
+    let base = serve(data.clone(), false);
+    let dir = scratch_dir("seg-norange");
+    let out = dir.join("out.bin");
+    let mut opts = options();
+    opts.segments = 4;
+
+    download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
+
+    assert_eq!(std::fs::read(&out).unwrap(), data);
+    assert!(leftover_parts(&dir).is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn an_unreachable_server_falls_back_and_then_fails() {
+    let dir = scratch_dir("seg-refused");
+    let out = dir.join("out.bin");
+    let mut opts = options();
+    opts.segments = 3;
+
+    assert!(download_file("http://127.0.0.1:1/file", out.to_str().unwrap(), &opts, None).is_err());
+    std::fs::remove_dir_all(dir).unwrap();
+}

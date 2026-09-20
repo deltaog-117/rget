@@ -16,6 +16,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
+//! Progress bar wrapper shared by every download strategy.
+
 use indicatif::{ProgressBar, ProgressStyle};
 
 pub struct ProgressBarWrapper {

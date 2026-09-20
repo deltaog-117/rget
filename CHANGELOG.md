@@ -8,7 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- (None yet – this is the initial stable release)
+- Library crate (`src/lib.rs`) alongside the binary, so the public API can be tested from `tests/`
+- Characterization test suite pinning the 1.0.0 behaviour: 16 in-file unit tests, 40 mirrored unit tests (`tests/unit/`), and 11 integration tests that run the real download code against an in-process HTTP server (`tests/integration/`)
+- `DownloadOptions` struct grouping the per-download settings
+
+### Changed
+- Restructured the source tree from a flat `src/` into a feature-first layout: `app/` (CLI, config, settings merge, wiring), `features/{download,validation,integrity,input,destination}/`, and `shared/` (progress bar, size parsing). `main.rs` is now a thin entry point. No user-visible behaviour change; verified identical to 1.0.0 across 65 end-to-end cases.
+- `RgetError` split into per-feature error types (`download`, `validation`, `integrity`) aggregated by `AppError`; error messages and the `Error: …` output on failure are unchanged
+- The checksum step now verifies the path the download actually wrote to, instead of recomputing it
+- Removed clippy warnings from the carried-over code
 
 ---
 

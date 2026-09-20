@@ -16,6 +16,35 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-fn main() -> rget::app::Result<()> {
-    rget::app::run()
+//! Validation: is this URL safe to fetch?
+
+mod error;
+mod host;
+mod sanitize;
+
+pub use error::{Error, Result};
+
+use url::Url;
+
+pub fn validate_url(url_str: &str) -> Result<Url> {
+    // --- 1. CUSTOM SANITIZATION ---
+    let clean_url_str = sanitize::sanitize_url(url_str)?;
+
+    // --- 2. STANDARD URL VALIDATION ---
+    let url = Url::parse(&clean_url_str)
+        .map_err(|_| Error::InvalidUrl(clean_url_str.clone()))?;
+
+    // Only allow HTTP/HTTPS
+    let scheme = url.scheme();
+    if scheme != "http" && scheme != "https" {
+        return Err(Error::InvalidUrl(format!(
+            "Only HTTP/HTTPS supported, got: {}",
+            scheme
+        )));
+    }
+
+    // --- 3. HOST CHECKS ---
+    host::ensure_public(&url)?;
+
+    Ok(url)
 }

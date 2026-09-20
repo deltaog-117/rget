@@ -16,6 +16,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-fn main() -> rget::app::Result<()> {
-    rget::app::run()
-}
+//! Input: where do the URLs come from?
+
+mod url_list;
+
+pub use url_list::read_url_list;

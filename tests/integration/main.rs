@@ -16,6 +16,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-fn main() -> rget::app::Result<()> {
-    rget::app::run()
-}
+//! Integration tests: the public API against real sockets, mirroring `src/`.
+
+mod download;

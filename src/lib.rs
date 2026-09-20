@@ -16,6 +16,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-fn main() -> rget::app::Result<()> {
-    rget::app::run()
-}
+//! rget: a safe, modern downloader for Linux.
+//!
+//! The binary in `main.rs` is a thin shell around [`app::run`]. The logic lives here so
+//! that `tests/` can exercise the public API.
+
+pub mod app;
+pub mod features;
+pub mod shared;

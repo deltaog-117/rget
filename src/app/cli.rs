@@ -16,54 +16,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
+//! Command-line interface definition.
+
+use crate::shared::size::parse_size;
 use clap::Parser;
-
-/// Parse human-readable size strings like "500k", "2M", "1G" (or "0" for no limit)
-fn parse_size(s: &str) -> Result<usize, String> {
-    let s = s.trim();
-    if s == "0" {
-        return Ok(0);
-    }
-    if s.is_empty() {
-        return Err("Empty size string".to_string());
-    }
-
-    let (num_str, suffix) = {
-        let chars: Vec<char> = s.chars().collect();
-        let mut num_end = 0;
-        for (i, c) in chars.iter().enumerate() {
-            if c.is_ascii_digit() || *c == '.' {
-                num_end = i + 1;
-            } else {
-                break;
-            }
-        }
-        if num_end == 0 {
-            return Err(format!("Invalid size format: {}", s));
-        }
-        let num_str: String = chars[..num_end].iter().collect();
-        let suffix: String = chars[num_end..].iter().collect();
-        (num_str, suffix.to_lowercase())
-    };
-
-    let num: f64 = num_str.parse().map_err(|_| format!("Invalid number: {}", num_str))?;
-
-    let bytes = match suffix.as_str() {
-        "" => num,
-        "b" => num,
-        "k" | "kb" => num * 1024.0,
-        "m" | "mb" => num * 1024.0 * 1024.0,
-        "g" | "gb" => num * 1024.0 * 1024.0 * 1024.0,
-        "t" | "tb" => num * 1024.0 * 1024.0 * 1024.0 * 1024.0,
-        _ => return Err(format!("Unknown size suffix: {}", suffix)),
-    };
-
-    if bytes < 1.0 {
-        return Err("Rate limit must be at least 1 byte".to_string());
-    }
-
-    Ok(bytes as usize)
-}
 
 #[derive(Parser, Debug)]
 #[command(name = "rget")]

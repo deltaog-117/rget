@@ -16,6 +16,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-fn main() -> rget::app::Result<()> {
-    rget::app::run()
-}
+//! Integrity: did we get the right bytes?
+
+mod error;
+mod sha256;
+
+pub use error::Error;
+pub use sha256::{compute_sha256, verify_sha256};

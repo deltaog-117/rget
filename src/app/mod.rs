@@ -16,6 +16,15 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-fn main() -> rget::app::Result<()> {
-    rget::app::run()
-}
+//! Composition root: parses arguments, loads config, and wires the features together.
+//!
+//! This is the only layer allowed to know about more than one feature.
+
+pub mod cli;
+pub mod config;
+pub mod error;
+pub mod run;
+pub mod settings;
+
+pub use error::{AppError, Result};
+pub use run::run;
