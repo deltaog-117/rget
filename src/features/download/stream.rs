@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Streams a response body to a writer through one reusable buffer.
 
 use super::error::{Error, Result};
@@ -34,7 +33,9 @@ const BUFFER_SIZE: usize = 64 * 1024;
 /// # Errors
 ///
 /// A read failure becomes [`Error::Stalled`] (timeout), [`Error::Network`] (any other
-/// transport error) or [`Error::Io`]; a write failure is always [`Error::Io`].
+/// transport error) or [`Error::Io`]; a write failure is always [`Error::Io`]. Pressing
+/// Ctrl+C is noticed between chunks and becomes [`Error::Interrupted`], leaving whatever
+/// was already written in place.
 pub(super) fn copy<R, W, F>(
     reader: &mut R,
     writer: &mut W,
@@ -51,6 +52,10 @@ where
     let mut total = 0u64;
 
     loop {
+        if crate::shared::interrupt::requested() {
+            return Err(Error::Interrupted);
+        }
+
         let want = throttle.read_size(buffer.len());
         let read = reader
             .read(&mut buffer[..want])
@@ -70,7 +75,10 @@ where
 /// `reqwest` reports body failures as an `io::Error` wrapping a `reqwest::Error`; unwrap it
 /// so timeouts and transport errors keep their meaning.
 fn classify_read_error(error: io::Error, stall_secs: u64) -> Error {
-    if !error.get_ref().is_some_and(|inner| inner.is::<reqwest::Error>()) {
+    if !error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<reqwest::Error>())
+    {
         return Error::Io(error);
     }
 
@@ -157,9 +165,17 @@ mod tests {
 
     #[test]
     fn an_empty_input_writes_nothing() {
-        let mut reader = ChunkedReader { data: vec![], position: 0, sizes: vec![10], turn: 0 };
+        let mut reader = ChunkedReader {
+            data: vec![],
+            position: 0,
+            sizes: vec![10],
+            turn: 0,
+        };
         let mut out = Vec::new();
-        assert_eq!(copy(&mut reader, &mut out, &mut Throttle::new(None), 30, |_| {}).unwrap(), 0);
+        assert_eq!(
+            copy(&mut reader, &mut out, &mut Throttle::new(None), 30, |_| {}).unwrap(),
+            0
+        );
         assert!(out.is_empty());
     }
 
@@ -178,8 +194,20 @@ mod tests {
 
     #[test]
     fn a_write_failure_is_an_io_error() {
-        let mut reader = ChunkedReader { data: vec![1; 100], position: 0, sizes: vec![10], turn: 0 };
-        let err = copy(&mut reader, &mut FullDisk, &mut Throttle::new(None), 30, |_| {}).unwrap_err();
+        let mut reader = ChunkedReader {
+            data: vec![1; 100],
+            position: 0,
+            sizes: vec![10],
+            turn: 0,
+        };
+        let err = copy(
+            &mut reader,
+            &mut FullDisk,
+            &mut Throttle::new(None),
+            30,
+            |_| {},
+        )
+        .unwrap_err();
         assert!(matches!(err, Error::Io(_)));
     }
 }

@@ -15,7 +15,10 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
-fn main() -> rget::app::Result<()> {
-    rget::app::run()
+fn main() -> std::process::ExitCode {
+    if let Err(e) = rget::app::run() {
+        eprintln!("Error: {}", e);
+        return std::process::ExitCode::FAILURE;
+    }
+    std::process::ExitCode::SUCCESS
 }

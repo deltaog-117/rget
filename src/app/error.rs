@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Application-level error: the sum of every feature error `run` can propagate.
 
 use crate::features::{download, integrity, validation};
@@ -37,8 +36,9 @@ pub enum AppError {
     Io(#[from] std::io::Error),
 }
 
-// `main` prints `Error: {:?}`. Forwarding to the wrapped error's `Debug` keeps
-// that output byte-for-byte what it was before errors were split per feature.
+// `main` reports failures with `Display` (see `main.rs`), which `#[error(...)]` already
+// derives per variant. `Debug` only exists to satisfy `std::error::Error`'s supertrait
+// bound, so it forwards to the wrapped error's own `Debug` rather than dumping this enum.
 impl fmt::Debug for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

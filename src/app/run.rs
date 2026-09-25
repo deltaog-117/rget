@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Wiring: input → validate → destination → download → integrity.
 
 use super::cli::Args;
@@ -25,6 +24,7 @@ use super::settings::Settings;
 use crate::features::destination::{Claims, ExistingFile, Placement, SkipReason};
 use crate::features::download::{Outcome, Relocate, Verifier};
 use crate::features::{destination, download, input, integrity, validation};
+use crate::shared::interrupt;
 use crate::shared::size::format_size;
 use clap::{CommandFactory, Parser};
 use indicatif::MultiProgress;
@@ -34,6 +34,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn run() -> Result<()> {
     env_logger::init();
+    interrupt::install();
     let args = Args::parse();
 
     // --- HANDLE --version ---
@@ -58,7 +59,7 @@ pub fn run() -> Result<()> {
 
     // --- LOAD CONFIG & MERGE WITH CLI ---
     let config = if !args.no_config {
-        Config::load()
+        Config::load(args.quiet)
     } else {
         Config::default()
     };
@@ -108,8 +109,18 @@ pub fn run() -> Result<()> {
     let claims = Arc::new(Mutex::new(Claims::new()));
     let mut tasks: Vec<(String, String)> = Vec::new();
     let mut skipped: Vec<(String, String, SkipReason)> = Vec::new();
+    let mut error_count = 0;
     for url_str in &urls {
-        let url = validation::validate_url_with(url_str, settings.host_policy())?;
+        // An invalid URL is reported and skipped, so one bad URL in a batch never stops the
+        // others from downloading.
+        let url = match validation::validate_url_with(url_str, settings.host_policy()) {
+            Ok(url) => url,
+            Err(e) => {
+                eprintln!("❌ {} -> {}", url_str, e);
+                error_count += 1;
+                continue;
+            }
+        };
         let base_name = destination::file_name_for(&url, args.output.as_deref());
         let output_path = destination::output_path(
             &base_name,
@@ -175,15 +186,19 @@ pub fn run() -> Result<()> {
     }
 
     // --- SKIPPED (the file is already there) ---
-    let mut error_count = 0;
     // `--sha256` only applies to a single URL, as before.
     let digest = args.sha256.clone().filter(|_| urls.len() == 1);
     for (url, path, reason) in &skipped {
         if !quiet {
             match reason {
                 SkipReason::Exists => eprintln!("⏭️  {} -> {} already exists, skipping", url, path),
-                SkipReason::EarlierUrl => eprintln!("⏭️  {} -> {} has the same file name as an earlier URL, skipping", url, path),
-                SkipReason::NoFreeName => eprintln!("⏭️  {} -> no free file name for {}, skipping", url, path),
+                SkipReason::EarlierUrl => eprintln!(
+                    "⏭️  {} -> {} has the same file name as an earlier URL, skipping",
+                    url, path
+                ),
+                SkipReason::NoFreeName => {
+                    eprintln!("⏭️  {} -> no free file name for {}, skipping", url, path)
+                }
             }
         }
         // An existing file that was kept can still be checked against the digest.
@@ -223,7 +238,8 @@ pub fn run() -> Result<()> {
         ExistingFile::Skip => download::OnOccupied::Skip,
         ExistingFile::Rename => {
             let claims = Arc::clone(&claims);
-            let relocate: Relocate = Arc::new(move |occupied| claims.lock().ok()?.relocate(occupied));
+            let relocate: Relocate =
+                Arc::new(move |occupied| claims.lock().ok()?.relocate(occupied));
             download::OnOccupied::Relocate(relocate)
         }
     };
@@ -235,8 +251,12 @@ pub fn run() -> Result<()> {
         None
     };
 
-    download::run_pool(tasks, settings.jobs, options, multi_progress, |url, _requested, result| {
-        match result {
+    download::run_pool(
+        tasks,
+        settings.jobs,
+        options,
+        multi_progress,
+        |url, _requested, result| match result {
             Ok(Outcome::Saved(path)) => {
                 if !quiet {
                     eprintln!("✅ {} -> {}", url, path);
@@ -247,13 +267,21 @@ pub fn run() -> Result<()> {
                     eprintln!("⏭️  {} -> {} already exists, skipped", url, path);
                 }
             }
+            // Already announced once by the Ctrl+C handler itself.
+            Err(download::Error::Interrupted) => {
+                error_count += 1;
+            }
             Err(e) => {
                 eprintln!("❌ {} -> {}", url, e);
                 error_count += 1;
             }
-        }
-    });
+        },
+    );
 
+    // Conventional shell exit code for a process that stopped on SIGINT.
+    if interrupt::requested() {
+        std::process::exit(130);
+    }
     if error_count > 0 {
         std::process::exit(1);
     }

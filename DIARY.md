@@ -24,6 +24,7 @@
 | 2026-09-20 | Names taken from URLs | Decode, then sanitize; defer `Content-Disposition` | ✅ Confirmed |
 | 2026-09-20 | Existing files (no-clobber) | `--if-exists overwrite\|skip\|rename`, default unchanged | ✅ Confirmed |
 | 2026-09-20 | Verifying a checksum | Verify before putting in place, via a hook; delete on mismatch | ✅ Confirmed |
+| 2026-09-25 | Handling Ctrl+C | `ctrlc` crate + one shared flag checked in `stream::copy` | ✅ Confirmed |
 
 ---
 
@@ -1157,3 +1158,106 @@ Probing the tool showed three things. A download over an existing, hand-edited f
 |------|--------|--------|
 | 2026-09-20 | Initial entry | deltaog-117 |
 
+
+---
+
+### Cycle 7: Small Correctness and Polish Fixes (D1–D5)
+
+**Date:** 2026-09-25
+**Status:** ✅ Confirmed
+
+---
+
+#### Context / Background
+
+With the high- and medium-priority groups clear (Cycles 0–6), the roadmap's low-priority
+list (`D1`–`D15`) held several small, independent defects and rough edges rather than one
+feature. Five were picked for this cycle: `D1` (`--init` throttles new users to 1 MB/s
+without saying so), `D2` (a broken `config.toml` is silently ignored), `D3` (`main`
+prints Rust's raw `Debug` output on failure, and one invalid URL in a batch used to abort
+every other URL in the same run), `D4` (the `User-Agent` is hardcoded to `rget/0.1.0`
+while the crate is 1.0.0), and `D5` (the progress bar has no transfer speed, a poor fit
+for an unknown-size download, and no handling for Ctrl+C).
+
+Four of the five (`D1`, `D2`, `D4`, and the speed/spinner half of `D5`) were mechanical,
+single-file fixes with one obvious approach, so they went in without a COA table per
+`4iteration.md`'s "only when the approach isn't obvious" rule. Ctrl+C handling was the one
+genuine design point: it needed a new dependency and touches the one loop every download
+path streams through.
+
+---
+
+#### Options Considered
+
+**Option A: `ctrlc` crate + one shared atomic flag checked in `stream::copy`**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Small, well-audited crate (used by ripgrep, fd) <br> • One flag checked in the single loop every download path already streams through (single-connection, segmented, `-j`) covers all of them without per-path duplication <br> • The handler runs on its own thread (per the crate's own contract), so printing and setting the flag from it is safe |
+| **Disadvantages** | • One new dependency |
+| **Implementation Difficulty** | Small |
+| **Fit with Constraints** | Best |
+
+**Option B: Raw `libc`/`signal-hook` signal handling**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • No mid-level crate abstraction to trust |
+| **Disadvantages** | • Async-signal-safety pitfalls to get right by hand <br> • `signal-hook` is a comparably sized dependency anyway, so there is no real saving |
+| **Implementation Difficulty** | Medium |
+| **Fit with Constraints** | Worse for the same result |
+
+**Option C: No handler; ship only the progress-bar polish**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Zero new dependency, zero design risk |
+| **Disadvantages** | • Leaves `D5` half-done <br> • Ctrl+C still just kills the process outright, with no "resume with -c" hint and no guarantee the terminal is left in a clean state |
+| **Implementation Difficulty** | Trivial |
+| **Fit with Constraints** | Poor — does not answer what `D5` actually asks for |
+
+---
+
+#### Decision & Rationale
+
+**Chosen Option:** A, picked by the user from the table above.
+
+**How it works:**
+- **`D1`:** the `limit_rate = 1048576` line `--init` writes is now commented out (`# limit_rate = 1048576  # bytes per second; unset means no limit`), matching how every other optional key in the generated file is already presented.
+- **`D2`:** `Config::load` now takes `quiet: bool` and reports a read or parse failure on stderr (`⚠️  Could not parse …`) before falling back to defaults, instead of swallowing the error. The call site passes `args.quiet` directly, since a broken config file cannot itself supply that flag.
+- **`D3`:** the per-URL loop in `run()` now matches on `validate_url_with`'s result instead of using `?`; a failure is reported and the loop `continue`s, so the rest of the batch still runs. `main` no longer relies on the standard library's default `Result`-returning-`main` behaviour (which prints `Error: {:?}`); it matches `rget::app::run()` itself and prints the error with `{}` (`Display`, which `thiserror`'s `#[error(...)]` already derives per variant), returning `ExitCode::FAILURE`. `AppError`'s manual `Debug` impl stays, since `std::error::Error` still requires it, but its doc comment now says why.
+- **`D4`:** a `DEFAULT_USER_AGENT` constant (`concat!("rget/", env!("CARGO_PKG_VERSION"))`) replaces the literal `"rget/0.1.0"`.
+- **`D5` (progress):** the bar's template gained `{binary_bytes_per_sec}`, and an unknown-size download now builds a `ProgressStyle::default_spinner()` with its own template (`{spinner} [{elapsed}] {bytes} ({rate})`) instead of reusing the determinate-bar template, which had a `{bar}` with no length and an `{eta}` that could never be computed.
+- **`D5` (Ctrl+C):** `shared::interrupt` holds one `AtomicBool`. `install()` (called once, from `run()`) registers a `ctrlc` handler that sets the flag and prints the interrupt notice the first time it fires. `stream::copy` — the one loop every download path (single-connection, every segment, every `-j` worker) streams bytes through — checks the flag once per chunk and returns the new `download::Error::Interrupted`, which is not retried (`retry::is_retryable`) and is not printed a second time by the retry loop or by the segmented per-part error path, since the handler already announced it once. `run()` reports exit code `130` (the conventional code for a process that stopped on `SIGINT`) when the flag is set, ahead of the ordinary `error_count > 0` check.
+- Whatever was already written to `name.part` (or `name.part<i>` for segments) and its `.part.meta` sidecar are untouched by an interrupt: it is exactly the same "stopped partway through" state a stalled connection or a killed process already leaves, and `-c` already knows how to continue from it.
+
+**Trade-offs accepted:**
+- The interrupt flag is process-wide, so a second Ctrl+C before the first is noticed does nothing new — the process can only unblock a stalled read once its own read times out (bounded by `-t`, default 30s). This was accepted as a reasonable bound rather than added complexity to interrupt a blocking read directly.
+- No unit test flips the real `INTERRUPTED` flag: `cargo test` runs every test in one process, and `stream::copy`'s own tests share that process, so setting the flag true in a test would race any `stream::copy` call running concurrently in another test thread. The flag's read/write mechanics are trivial enough (one `AtomicBool`) that this was judged not worth the flakiness risk; `is_retryable(&Error::Interrupted)` is covered instead.
+
+---
+
+#### Implementation Notes
+
+> - `shared/interrupt.rs` (new): `install()`, `requested()`, backed by one `static AtomicBool`.
+> - `features/download/error.rs`: new `Error::Interrupted` variant (`#[error("Interrupted")]`).
+> - `features/download/stream.rs`: `interrupt::requested()` checked at the top of the copy loop.
+> - `features/download/retry.rs`: `Interrupted` added to the non-retryable arm and to the "already announced, don't print again" exclusion alongside `RangesUnsupported`.
+> - `features/download/segmented.rs`: a part returning `Interrupted` is recorded as `first_error` without its own `❌ Part N: …` line.
+> - `app/run.rs`: `interrupt::install()` at the top of `run()`; the `run_pool` callback skips the per-URL `❌` line for `Interrupted`; exit code `130` when `interrupt::requested()`, checked before the ordinary `error_count` exit.
+> - `Cargo.toml`: `ctrlc = "3.4"`.
+
+---
+
+#### References
+
+- `ROADMAP.md`, items D1–D5
+- `$SUITE/4iteration.md` (COA-table rule), `$SUITE/2engineering.md` (no silent failures, no comments for "what")
+
+---
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-09-25 | Initial entry | deltaog-117 |

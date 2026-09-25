@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! HTTP client construction and request decoration.
 
 use super::error::{Error, Result};
@@ -33,6 +32,9 @@ use url::{Host, Url};
 
 /// The most redirects one request may follow.
 const MAX_REDIRECTS: usize = 10;
+
+/// Sent as `User-Agent` when `-A`/`--user-agent` and the config file leave it unset.
+const DEFAULT_USER_AGENT: &str = concat!("rget/", env!("CARGO_PKG_VERSION"));
 
 type BoxError = Box<dyn StdError + Send + Sync>;
 
@@ -65,9 +67,15 @@ pub(super) fn refusal_in(error: &reqwest::Error) -> Option<String> {
 /// public, or a name that always means this machine. `None` means it may be.
 fn destination_refusal(url: &Url) -> Option<String> {
     match url.host()? {
-        Host::Ipv4(ip) if !is_public(IpAddr::V4(ip)) => Some(format!("{} is a local or private address", ip)),
-        Host::Ipv6(ip) if !is_public(IpAddr::V6(ip)) => Some(format!("{} is a local or private address", ip)),
-        Host::Domain(name) if is_local_name(name) => Some(format!("{} always refers to this machine", name)),
+        Host::Ipv4(ip) if !is_public(IpAddr::V4(ip)) => {
+            Some(format!("{} is a local or private address", ip))
+        }
+        Host::Ipv6(ip) if !is_public(IpAddr::V6(ip)) => {
+            Some(format!("{} is a local or private address", ip))
+        }
+        Host::Domain(name) if is_local_name(name) => {
+            Some(format!("{} always refers to this machine", name))
+        }
         _ => None,
     }
 }
@@ -90,10 +98,20 @@ fn guarded_redirects() -> Policy {
 
 /// Keeps the public addresses a name resolved to. A name that resolves *only* to non-public
 /// addresses is refused; one that resolves to nothing is left for the caller to report.
-fn keep_public(host: &str, addrs: Vec<SocketAddr>) -> std::result::Result<Vec<SocketAddr>, Refused> {
-    let public: Vec<SocketAddr> = addrs.iter().copied().filter(|a| is_public(a.ip())).collect();
+fn keep_public(
+    host: &str,
+    addrs: Vec<SocketAddr>,
+) -> std::result::Result<Vec<SocketAddr>, Refused> {
+    let public: Vec<SocketAddr> = addrs
+        .iter()
+        .copied()
+        .filter(|a| is_public(a.ip()))
+        .collect();
     if public.is_empty() && !addrs.is_empty() {
-        return Err(Refused(format!("{} resolves only to local or private addresses", host)));
+        return Err(Refused(format!(
+            "{} resolves only to local or private addresses",
+            host
+        )));
     }
     Ok(public)
 }
@@ -118,7 +136,10 @@ impl Resolve for FilteringResolver {
         let lookup = self.lookup;
         Box::pin(async move {
             if is_local_name(&host) {
-                return Err(Box::new(Refused(format!("{} always refers to this machine", host))) as BoxError);
+                return Err(
+                    Box::new(Refused(format!("{} always refers to this machine", host)))
+                        as BoxError,
+                );
             }
             let to_resolve = host.clone();
             let addrs = tokio::task::spawn_blocking(move || lookup(&to_resolve))
@@ -143,7 +164,12 @@ pub(super) fn build(timeout: u64, follow_redirects: bool, policy: HostPolicy) ->
     build_with_lookup(timeout, follow_redirects, policy, system_lookup)
 }
 
-fn build_with_lookup(timeout: u64, follow_redirects: bool, policy: HostPolicy, lookup: Lookup) -> Result<Client> {
+fn build_with_lookup(
+    timeout: u64,
+    follow_redirects: bool,
+    policy: HostPolicy,
+    lookup: Lookup,
+) -> Result<Client> {
     let redirects = if !follow_redirects {
         Policy::none()
     } else if policy.blocks_private() {
@@ -171,7 +197,7 @@ pub(super) fn apply_headers(
     if let Some(ua) = user_agent {
         request_builder = request_builder.header(USER_AGENT, ua);
     } else {
-        request_builder = request_builder.header(USER_AGENT, "rget/0.1.0");
+        request_builder = request_builder.header(USER_AGENT, DEFAULT_USER_AGENT);
     }
 
     // Apply custom headers
@@ -194,7 +220,10 @@ pub(super) fn ensure_success(response: Response) -> Result<Response> {
             .get(RETRY_AFTER)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| super::retry::parse_retry_after(v, SystemTime::now()));
-        Err(Error::HttpStatus { status, retry_after })
+        Err(Error::HttpStatus {
+            status,
+            retry_after,
+        })
     }
 }
 
@@ -213,9 +242,17 @@ mod tests {
     #[test]
     fn destinations_are_refused_by_their_host() {
         for target in [
-            "http://127.0.0.1/x", "http://127.0.0.2:8080/x", "http://169.254.169.254/latest", "http://10.1.2.3/x",
-            "http://192.168.0.1/x", "http://0.0.0.0/x", "http://[::1]/x", "http://[::ffff:127.0.0.1]/x",
-            "http://localhost/x", "http://foo.localhost/x", "http://localhost./x",
+            "http://127.0.0.1/x",
+            "http://127.0.0.2:8080/x",
+            "http://169.254.169.254/latest",
+            "http://10.1.2.3/x",
+            "http://192.168.0.1/x",
+            "http://0.0.0.0/x",
+            "http://[::1]/x",
+            "http://[::ffff:127.0.0.1]/x",
+            "http://localhost/x",
+            "http://foo.localhost/x",
+            "http://localhost./x",
         ] {
             assert!(destination_refusal(&url(target)).is_some(), "{target}");
         }
@@ -223,7 +260,12 @@ mod tests {
 
     #[test]
     fn public_destinations_and_ordinary_names_are_left_alone() {
-        for target in ["http://8.8.8.8/x", "https://example.com/x", "http://[2001:4860:4860::8888]/x", "http://internal.example.com/x"] {
+        for target in [
+            "http://8.8.8.8/x",
+            "https://example.com/x",
+            "http://[2001:4860:4860::8888]/x",
+            "http://internal.example.com/x",
+        ] {
             assert_eq!(destination_refusal(&url(target)), None, "{target}");
         }
     }
@@ -231,13 +273,21 @@ mod tests {
     #[test]
     fn a_name_is_kept_only_for_its_public_addresses() {
         let mixed = vec![addr("10.0.0.1"), addr("93.184.216.34"), addr("::1")];
-        assert_eq!(keep_public("example.com", mixed).unwrap(), vec![addr("93.184.216.34")]);
+        assert_eq!(
+            keep_public("example.com", mixed).unwrap(),
+            vec![addr("93.184.216.34")]
+        );
     }
 
     #[test]
     fn a_name_that_resolves_only_to_private_addresses_is_refused() {
-        let err = keep_public("evil.example", vec![addr("127.0.0.1"), addr("192.168.1.1")]).unwrap_err();
-        assert!(err.0.contains("evil.example") && err.0.contains("local or private"), "{}", err.0);
+        let err =
+            keep_public("evil.example", vec![addr("127.0.0.1"), addr("192.168.1.1")]).unwrap_err();
+        assert!(
+            err.0.contains("evil.example") && err.0.contains("local or private"),
+            "{}",
+            err.0
+        );
     }
 
     /// A one-shot local HTTP server, so a request that is *not* refused has somewhere to land.
@@ -251,7 +301,9 @@ mod tests {
                 let _ = contacted.send(());
                 let mut buf = [0u8; 512];
                 let _ = stream.read(&mut buf);
-                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                );
             }
         });
         (port, seen)
@@ -268,21 +320,42 @@ mod tests {
     #[test]
     fn the_installed_resolver_refuses_a_name_that_leads_to_loopback() {
         let (port, contacted) = local_server();
-        let client = build_with_lookup(5, true, HostPolicy::BlockPrivate, resolves_to_loopback).unwrap();
+        let client =
+            build_with_lookup(5, true, HostPolicy::BlockPrivate, resolves_to_loopback).unwrap();
 
-        let error: Error = client.get(format!("http://evil.example:{port}/")).send().unwrap_err().into();
+        let error: Error = client
+            .get(format!("http://evil.example:{port}/"))
+            .send()
+            .unwrap_err()
+            .into();
 
         match error {
-            Error::BlockedAddress(reason) => assert!(reason.contains("evil.example") && reason.contains("local or private"), "{reason}"),
+            Error::BlockedAddress(reason) => assert!(
+                reason.contains("evil.example") && reason.contains("local or private"),
+                "{reason}"
+            ),
             other => panic!("expected BlockedAddress, got {other:?}"),
         }
-        assert!(contacted.recv_timeout(Duration::from_millis(300)).is_err(), "the server must not have been contacted");
+        assert!(
+            contacted.recv_timeout(Duration::from_millis(300)).is_err(),
+            "the server must not have been contacted"
+        );
     }
 
     #[test]
     fn the_installed_resolver_refuses_a_name_that_only_leads_to_private_addresses() {
-        let client = build_with_lookup(5, true, HostPolicy::BlockPrivate, resolves_to_a_mix_of_private_addresses).unwrap();
-        let error: Error = client.get("http://evil.example:81/").send().unwrap_err().into();
+        let client = build_with_lookup(
+            5,
+            true,
+            HostPolicy::BlockPrivate,
+            resolves_to_a_mix_of_private_addresses,
+        )
+        .unwrap();
+        let error: Error = client
+            .get("http://evil.example:81/")
+            .send()
+            .unwrap_err()
+            .into();
         assert!(matches!(error, Error::BlockedAddress(_)), "{error:?}");
     }
 
@@ -290,22 +363,36 @@ mod tests {
     fn allowing_private_hosts_installs_no_filter_at_all() {
         // The injected lookup is never consulted, so an unknown name fails as an ordinary DNS
         // error, not as a refusal.
-        let client = build_with_lookup(3, true, HostPolicy::AllowPrivate, resolves_to_loopback).unwrap();
-        let error: Error = client.get("http://no-such-host.invalid:81/").send().unwrap_err().into();
+        let client =
+            build_with_lookup(3, true, HostPolicy::AllowPrivate, resolves_to_loopback).unwrap();
+        let error: Error = client
+            .get("http://no-such-host.invalid:81/")
+            .send()
+            .unwrap_err()
+            .into();
         assert!(matches!(error, Error::Network(_)), "{error:?}");
     }
 
     #[test]
     fn an_ordinary_network_failure_is_not_mistaken_for_a_refusal() {
-        let client = build_with_lookup(2, true, HostPolicy::BlockPrivate, resolves_to_loopback).unwrap();
+        let client =
+            build_with_lookup(2, true, HostPolicy::BlockPrivate, resolves_to_loopback).unwrap();
         // Port 1 on a public-looking literal is never reached: the literal skips the resolver,
         // and connecting to a documentation address fails as an ordinary network error.
-        let error: Error = client.get("http://192.0.2.1:1/").timeout(Duration::from_millis(300)).send().unwrap_err().into();
+        let error: Error = client
+            .get("http://192.0.2.1:1/")
+            .timeout(Duration::from_millis(300))
+            .send()
+            .unwrap_err()
+            .into();
         assert!(matches!(error, Error::Network(_)), "{error:?}");
     }
 
     #[test]
     fn a_name_that_resolves_to_nothing_is_left_for_the_caller_to_report() {
-        assert_eq!(keep_public("nothing.example", Vec::new()).unwrap(), Vec::<SocketAddr>::new());
+        assert_eq!(
+            keep_public("nothing.example", Vec::new()).unwrap(),
+            Vec::<SocketAddr>::new()
+        );
     }
 }

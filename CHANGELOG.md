@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--if-exists overwrite|skip|rename` (and `if_exists` in the config file) says what to do when the file already exists; `-n`/`--no-clobber` is short for `skip`. The default is unchanged (overwrite). `skip` leaves the file alone and exits 0; `rename` saves the new download as `file (1).zip`, `file (2).zip`, … (`archive (1).tar.gz` for a tarball)
 - A checksum given with `--sha256` is verified on the finished file before it is put in place, and an existing file that is skipped is verified too
 - Tests for digest parsing, name claiming, option merging, verification before placement, and a file appearing while a download runs
+- The progress bar now shows a smoothed transfer rate, and a download whose size is unknown ahead of time (no `Content-Length`) gets its own spinner display instead of a bar with a meaningless ETA
+- Ctrl+C is now caught: every download path stops between chunks, prints an interrupt notice once, and exits `130`, leaving the `.part` file and its sidecar in place for `-c` to continue
 
 ### Changed
 - Restructured the source tree from a flat `src/` into a feature-first layout: `app/` (CLI, config, settings merge, wiring), `features/{download,validation,integrity,input,destination}/`, and `shared/` (progress bar, size parsing). `main.rs` is now a thin entry point. No user-visible behaviour change; verified identical to 1.0.0 across 65 end-to-end cases.
@@ -58,6 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A checksum mismatch is now an ordinary per-URL failure (`❌ <url> -> Verification failed: Checksum mismatch: expected …, got …`, exit 1) instead of Rust's debug output, and it is not retried
 - `-c` cannot be combined with `-n` or `--if-exists skip|rename` on the command line; a `skip` or `rename` default in the config file does not apply to a run that resumes
 - `download_file` and the pool now report an `Outcome` (`Saved` with the path actually used, or `Skipped`)
+- `--init` now writes `limit_rate` commented out in the generated config, so a new user is not throttled to 1 MB/s by default without knowing
 - URL validation now judges the parsed URL instead of blacklisting characters in its text. The checks are: `http`/`https` only; a hostname made of letters, digits, `.`, `-` and `_`; no `..` path segment (in any encoding, including `\` and `%2f`); and no well-known secret file (`.env`, `.bashrc`, `.zshrc`, `etc/passwd`, `etc/shadow`, `etc/sudoers`, `.git/config`, `.aws/credentials`, `.ssh/id_rsa`, `.ssh/authorized_keys`) as whole decoded path segments. Only the path is examined for traversal and secret files; the host, query and fragment are not
 - The error for a secret-file URL now names the file (`Access to sensitive file '.env'`) instead of showing a regular expression, and an invalid hostname names the offending character
 - The URL is now parsed and its scheme checked before the content checks run, so `ftp://x/a;b` reports the scheme
@@ -88,6 +91,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An oversized leftover part no longer makes the merged file too long
 - A segment that was refused ranges no longer prints a spurious "Failed after 1 attempts" before the fallback succeeds
 - URLs containing `&`, `;`, `$`, `|`, `(` or `)` (`?a=1&b=2`, `file(1).zip`, `Rust_(programming_language)`, `;jsessionid=…`), encoded ones such as `%26`, hosts containing `.env` (`foo.environment.com`), names like `.env.example`, and query text such as `?next=../home` are no longer refused as "dangerous"
+- A `config.toml` that cannot be read or parsed is now reported on stderr (unless `-q`) instead of silently falling back to defaults with no explanation
+- One invalid URL in a batch of several no longer aborts every other URL in the same run: it is now reported and skipped, and the rest still download
+- `main` now reports a failure through `Display` (a clean one-line message) instead of the default runtime's raw `Error: {:?}` dump
+- The default `User-Agent` now reflects the crate's actual version (`rget/1.0.0`) instead of the hardcoded, stale `rget/0.1.0`
 
 ### Security
 - A redirect from an allowed host to a loopback, private or link-local address, and a hostname that resolves to one, used to be followed, so a URL could make rget read an internal service (a local one was read back and written to disk in testing). Both are now refused, including for segmented downloads

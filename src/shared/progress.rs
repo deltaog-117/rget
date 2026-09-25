@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Progress bar wrapper shared by every download strategy.
 
 use indicatif::{ProgressBar, ProgressStyle};
@@ -27,17 +26,30 @@ pub struct ProgressBarWrapper {
 impl ProgressBarWrapper {
     pub fn new(total_size: u64, existing_size: u64) -> Self {
         let bar = if total_size > 0 {
-            ProgressBar::new(total_size)
+            let bar = ProgressBar::new(total_size);
+            bar.set_style(
+                ProgressStyle::default_bar()
+                    .template(
+                        "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] \
+                         {bytes}/{total_bytes} ({binary_bytes_per_sec}, {eta})",
+                    )
+                    .expect("valid template")
+                    .progress_chars("━▸ "),
+            );
+            bar
         } else {
-            ProgressBar::new_spinner()
+            // The size is unknown ahead of time (no `Content-Length`), so a determinate bar
+            // and an ETA would be meaningless; a spinner reporting bytes and speed fits instead.
+            let bar = ProgressBar::new_spinner();
+            bar.set_style(
+                ProgressStyle::default_spinner()
+                    .template(
+                        "{spinner:.green} [{elapsed_precise}] {bytes} ({binary_bytes_per_sec})",
+                    )
+                    .expect("valid template"),
+            );
+            bar
         };
-
-        bar.set_style(
-            ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-                .expect("valid template")
-                .progress_chars("━▸ "),
-        );
 
         if existing_size > 0 {
             bar.set_position(existing_size);

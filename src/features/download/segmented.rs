@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Segmented (multi-connection) download of a single file.
 //!
 //! The remote file is split into byte ranges, each fetched by its own worker into
@@ -27,8 +26,8 @@ use super::client;
 use super::error::{Error, Result};
 use super::options::DownloadOptions;
 use super::outcome::Outcome;
-use super::parts;
 use super::partial::{Finished, PartMeta, Target};
+use super::parts;
 use super::resume::parse_content_range;
 use super::retry;
 use super::stream;
@@ -61,7 +60,12 @@ struct Shared {
 
 /// One attempt at one segment. Continues from whatever the part file already holds, so a
 /// retry (or a resume) only asks for the missing bytes.
-fn fetch_segment(shared: &Shared, index: usize, part_path: &Path, (start, end): (u64, u64)) -> Result<()> {
+fn fetch_segment(
+    shared: &Shared,
+    index: usize,
+    part_path: &Path,
+    (start, end): (u64, u64),
+) -> Result<()> {
     let expected = end - start + 1;
     let mut have = fs::metadata(part_path).map(|m| m.len()).unwrap_or(0);
     if have > expected {
@@ -74,12 +78,17 @@ fn fetch_segment(shared: &Shared, index: usize, part_path: &Path, (start, end): 
 
     let first = start + have;
     let client = client::build(shared.timeout, shared.follow_redirects, shared.host_policy)?;
-    let mut request_builder = client.get(&shared.url).header(RANGE, format!("bytes={}-{}", first, end));
+    let mut request_builder = client
+        .get(&shared.url)
+        .header(RANGE, format!("bytes={}-{}", first, end));
     if let Some(validator) = &shared.if_range {
         request_builder = request_builder.header(IF_RANGE, validator);
     }
-    let request_builder =
-        client::apply_headers(request_builder, shared.user_agent.as_deref(), &shared.headers);
+    let request_builder = client::apply_headers(
+        request_builder,
+        shared.user_agent.as_deref(),
+        &shared.headers,
+    );
 
     let response = request_builder.send()?;
     if response.status() == StatusCode::RANGE_NOT_SATISFIABLE {
@@ -122,17 +131,30 @@ fn fetch_segment(shared: &Shared, index: usize, part_path: &Path, (start, end): 
     }
 
     let mut file = if have > 0 {
-        OpenOptions::new().append(true).create(true).open(part_path)?
+        OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(part_path)?
     } else {
-        OpenOptions::new().write(true).create(true).truncate(true).open(part_path)?
+        OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(part_path)?
     };
 
     let mut throttle = Throttle::new(shared.limit);
-    let written = stream::copy(&mut response, &mut file, &mut throttle, shared.timeout, |n| {
-        if let Some(ref bar) = shared.progress {
-            bar.inc(n);
-        }
-    })?;
+    let written = stream::copy(
+        &mut response,
+        &mut file,
+        &mut throttle,
+        shared.timeout,
+        |n| {
+            if let Some(ref bar) = shared.progress {
+                bar.inc(n);
+            }
+        },
+    )?;
     log::debug!("part {} wrote {} bytes", index, written);
 
     if have + written != expected {
@@ -159,7 +181,11 @@ pub(super) fn download(
     let quiet = options.quiet;
     let segments = options.segments;
 
-    let client = client::build(options.timeout, options.follow_redirects, options.host_policy)?;
+    let client = client::build(
+        options.timeout,
+        options.follow_redirects,
+        options.host_policy,
+    )?;
 
     // The probe carries the same headers as the real requests, so servers that need
     // auth or a User-Agent answer it, and a disabled redirect policy is respected.
@@ -172,7 +198,10 @@ pub(super) fn download(
         Ok(r) => r,
         Err(e) => {
             if !quiet {
-                eprintln!("⚠️  HEAD request failed: {}; falling back to single-thread.", e);
+                eprintln!(
+                    "⚠️  HEAD request failed: {}; falling back to single-thread.",
+                    e
+                );
             }
             return super::download_single(url, output_path, options, multi_progress);
         }
@@ -222,7 +251,13 @@ pub(super) fn download(
     let ranges = parts::plan_ranges(total_size, segments);
 
     for (i, (start, end)) in ranges.iter().enumerate() {
-        log::debug!("range {}: {}-{} (length: {})", i, start, end, end - start + 1);
+        log::debug!(
+            "range {}: {}-{} (length: {})",
+            i,
+            start,
+            end,
+            end - start + 1
+        );
     }
 
     if ranges.is_empty() {
@@ -245,7 +280,9 @@ pub(super) fn download(
     // Parts from a run we will not continue, and leftovers beyond the current count.
     parts::discard_parts(output_path, if resuming { ranges.len() } else { 0 });
 
-    let part_paths: Vec<PathBuf> = (0..ranges.len()).map(|i| parts::part_path(output_path, i)).collect();
+    let part_paths: Vec<PathBuf> = (0..ranges.len())
+        .map(|i| parts::part_path(output_path, i))
+        .collect();
     let positions = if resuming {
         parts::reconcile(&part_paths, &ranges)
     } else {
@@ -308,13 +345,21 @@ pub(super) fn download(
                 log::debug!("{}", reason);
                 ranges_unsupported = true;
             }
+            // Already announced once by the Ctrl+C handler; printing it again per part
+            // would repeat the same message once for every segment still in flight.
+            Ok(Err(Error::Interrupted)) => {
+                first_error.get_or_insert(Error::Interrupted);
+            }
             Ok(Err(e)) => {
                 eprintln!("❌ Part {}: {}", i, e);
                 first_error.get_or_insert(e);
             }
             Err(_) => {
                 eprintln!("❌ Part {}: worker thread panicked", i);
-                first_error.get_or_insert(Error::ProtocolError(format!("part {} worker thread panicked", i)));
+                first_error.get_or_insert(Error::ProtocolError(format!(
+                    "part {} worker thread panicked",
+                    i
+                )));
             }
         }
     }

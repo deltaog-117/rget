@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Errors raised while fetching a file.
 
 use thiserror::Error;
@@ -59,6 +58,11 @@ pub enum Error {
     /// single connection.
     #[error("Server does not honour range requests: {0}")]
     RangesUnsupported(String),
+
+    /// The user pressed Ctrl+C. The partial data is left on disk exactly like any other
+    /// stopped transfer, so `-c` picks it up again.
+    #[error("Interrupted")]
+    Interrupted,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

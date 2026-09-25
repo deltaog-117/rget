@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Retry policy: which failures are worth another attempt, and how long to wait.
 
 use super::error::{Error, Result};
@@ -40,7 +39,8 @@ pub(super) fn is_retryable(error: &Error) -> bool {
         | Error::ProtocolError(_)
         | Error::RangesUnsupported(_)
         | Error::BlockedAddress(_)
-        | Error::Verification(_) => false,
+        | Error::Verification(_)
+        | Error::Interrupted => false,
     }
 }
 
@@ -96,7 +96,8 @@ where
 
         if attempt >= max_attempts || !is_retryable(&e) {
             // "Ranges unsupported" is not a failure: the caller falls back to one connection.
-            if !quiet && !matches!(e, Error::RangesUnsupported(_)) {
+            // "Interrupted" was already announced by the Ctrl+C handler itself.
+            if !quiet && !matches!(e, Error::RangesUnsupported(_) | Error::Interrupted) {
                 eprintln!("❌ {}Failed after {} attempts", label, attempt);
             }
             return Err(e);
@@ -139,7 +140,10 @@ mod tests {
     use reqwest::StatusCode;
 
     fn status(code: u16) -> Error {
-        Error::HttpStatus { status: StatusCode::from_u16(code).unwrap(), retry_after: None }
+        Error::HttpStatus {
+            status: StatusCode::from_u16(code).unwrap(),
+            retry_after: None,
+        }
     }
 
     #[test]
@@ -158,12 +162,15 @@ mod tests {
 
     #[test]
     fn local_and_protocol_errors_are_not_retried() {
-        assert!(!is_retryable(&Error::Io(std::io::Error::other("disk full"))));
+        assert!(!is_retryable(&Error::Io(std::io::Error::other(
+            "disk full"
+        ))));
         assert!(!is_retryable(&Error::RedirectDisabled(302, "/x".into())));
         assert!(!is_retryable(&Error::ProtocolError("bad".into())));
         assert!(!is_retryable(&Error::RangesUnsupported("200".into())));
         assert!(!is_retryable(&Error::BlockedAddress("127.0.0.1".into())));
         assert!(!is_retryable(&Error::Verification("bad digest".into())));
+        assert!(!is_retryable(&Error::Interrupted));
     }
 
     #[test]
@@ -176,7 +183,10 @@ mod tests {
 
     #[test]
     fn a_malformed_request_is_not_retried() {
-        let builder = reqwest::blocking::Client::new().get("not a url").send().unwrap_err();
+        let builder = reqwest::blocking::Client::new()
+            .get("not a url")
+            .send()
+            .unwrap_err();
         assert!(builder.is_builder());
         assert!(!is_retryable(&Error::Network(builder)));
     }
@@ -184,7 +194,10 @@ mod tests {
     #[test]
     fn retry_after_accepts_seconds() {
         let now = SystemTime::UNIX_EPOCH;
-        assert_eq!(parse_retry_after("120", now), Some(Duration::from_secs(120)));
+        assert_eq!(
+            parse_retry_after("120", now),
+            Some(Duration::from_secs(120))
+        );
         assert_eq!(parse_retry_after("  7 ", now), Some(Duration::from_secs(7)));
         assert_eq!(parse_retry_after("0", now), Some(Duration::ZERO));
     }
@@ -194,7 +207,10 @@ mod tests {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
         let later = httpdate::fmt_http_date(now + Duration::from_secs(30));
         let earlier = httpdate::fmt_http_date(now - Duration::from_secs(30));
-        assert_eq!(parse_retry_after(&later, now), Some(Duration::from_secs(30)));
+        assert_eq!(
+            parse_retry_after(&later, now),
+            Some(Duration::from_secs(30))
+        );
         assert_eq!(parse_retry_after(&earlier, now), Some(Duration::ZERO));
     }
 
@@ -221,8 +237,14 @@ mod tests {
 
     #[test]
     fn a_longer_retry_after_wins_and_a_shorter_one_does_not() {
-        assert_eq!(next_delay(1, 0, Some(Duration::from_secs(5))), Some(Duration::from_secs(5)));
-        assert_eq!(next_delay(3, 0, Some(Duration::from_secs(1))), Some(Duration::from_secs(4)));
+        assert_eq!(
+            next_delay(1, 0, Some(Duration::from_secs(5))),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(
+            next_delay(3, 0, Some(Duration::from_secs(1))),
+            Some(Duration::from_secs(4))
+        );
     }
 
     #[test]
@@ -282,7 +304,11 @@ mod tests {
         let mut seen = Vec::new();
         let result = run(1, true, "", |attempt| {
             seen.push(attempt);
-            if attempt == 0 { Err(Error::Stalled(1)) } else { Ok(()) }
+            if attempt == 0 {
+                Err(Error::Stalled(1))
+            } else {
+                Ok(())
+            }
         });
         assert!(result.is_ok());
         assert_eq!(seen, vec![0, 1]);

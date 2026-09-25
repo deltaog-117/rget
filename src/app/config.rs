@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! On-disk configuration (`~/.config/rget/config.toml`).
 
 use super::cli::IfExists;
@@ -40,18 +39,34 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn load() -> Self {
-        let config_path = Self::get_config_path();
-        if let Some(path) = config_path {
-            if path.exists() {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    if let Ok(config) = toml::from_str(&content) {
-                        return config;
-                    }
+    /// Loads `~/.config/rget/config.toml`. A missing file is silent (there is nothing to
+    /// load); a file that exists but cannot be read or parsed is reported on stderr, unless
+    /// `quiet`, so a typo in the config never fails silently back to defaults.
+    pub fn load(quiet: bool) -> Self {
+        let Some(path) = Self::get_config_path() else {
+            return Self::default();
+        };
+        if !path.exists() {
+            return Self::default();
+        }
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(e) => {
+                if !quiet {
+                    eprintln!("⚠️  Could not read {}: {}", path.display(), e);
                 }
+                return Self::default();
+            }
+        };
+        match toml::from_str(&content) {
+            Ok(config) => config,
+            Err(e) => {
+                if !quiet {
+                    eprintln!("⚠️  Could not parse {}: {}", path.display(), e);
+                }
+                Self::default()
             }
         }
-        Self::default()
     }
 
     pub fn get_config_path() -> Option<PathBuf> {
@@ -89,7 +104,7 @@ quiet = false
 jobs = 1
 follow_redirects = true
 resume = false
-limit_rate = 1048576  # 1 MB/s
+# limit_rate = 1048576  # bytes per second; unset means no limit
 segments = 1          # Number of parallel segments for a single file
 # directory_prefix = "/path/to/downloads"
 # allow_private = false   # set to true to allow loopback, private and link-local addresses
