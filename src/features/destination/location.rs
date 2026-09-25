@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Choosing the output directory and full path.
 
 use std::path::{Path, PathBuf};
@@ -27,8 +26,9 @@ pub fn default_download_dir() -> Option<PathBuf> {
 
 /// Resolves the full output path for `base_name`.
 ///
-/// `-P` wins, then an explicit `-O` (used as given), then the platform Downloads
-/// folder, then the current directory. Missing directories are created.
+/// `-P` wins, then an explicit `-O` (used as given), then, only when `use_downloads` asks
+/// for it (`-d`/`--downloads`), the platform Downloads folder. Otherwise the current
+/// directory, matching `wget` and `curl`. Missing directories are created.
 ///
 /// # Errors
 ///
@@ -37,6 +37,7 @@ pub fn output_path(
     base_name: &str,
     directory_prefix: Option<&str>,
     explicit_output: bool,
+    use_downloads: bool,
 ) -> std::io::Result<String> {
     if let Some(prefix) = directory_prefix {
         let dir = Path::new(prefix);
@@ -47,14 +48,17 @@ pub fn output_path(
     } else if explicit_output {
         // If -O or -P was explicitly given, use that
         Ok(base_name.to_string())
-    } else if let Some(dir) = default_download_dir() {
-        // Default Downloads folder
-        if !dir.exists() {
-            std::fs::create_dir_all(&dir)?;
+    } else if use_downloads {
+        if let Some(dir) = default_download_dir() {
+            if !dir.exists() {
+                std::fs::create_dir_all(&dir)?;
+            }
+            return Ok(dir.join(base_name).to_string_lossy().to_string());
         }
-        Ok(dir.join(base_name).to_string_lossy().to_string())
+        // No platform Downloads folder (e.g. `dirs` found none): fall back to CWD.
+        Ok(base_name.to_string())
     } else {
-        // Fallback to current directory
+        // Current directory, the default.
         Ok(base_name.to_string())
     }
 }

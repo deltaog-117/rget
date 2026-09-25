@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Command-line interface definition.
 
 use crate::features::destination::ExistingFile;
@@ -66,6 +65,10 @@ pub struct Args {
     /// Output directory prefix
     #[arg(short = 'P', long)]
     pub directory_prefix: Option<String>,
+
+    /// Save to the platform Downloads folder instead of the current directory
+    #[arg(short = 'd', long)]
+    pub downloads: bool,
 
     /// Resume an incomplete download
     #[arg(short = 'c', long)]

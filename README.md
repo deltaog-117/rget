@@ -16,7 +16,7 @@ Every time I needed to download a file from the terminal, I found myself torn be
 I wanted a tool that combined the **best of both** — `curl`'s flexibility with `wget`'s simplicity — while being **secure by default**. So I built **rget**: a modern, safe downloader that:
 
 - Refuses path-traversal URLs, well-known secret-file paths and malformed hostnames
-- Saves files to your `~/Downloads` folder by default (no clutter!)
+- Saves to the current directory by default, like `wget`/`curl` (`-d` saves to `~/Downloads` instead)
 - Supports segmented downloads for maximum speed
 - Uses Rust's memory safety guarantees
 - Feels like a native Linux tool with modern progress bars
@@ -33,7 +33,7 @@ Whether you're a developer downloading dependencies, a sysadmin fetching logs, o
 - 🔄 **Automatic retries** (`-r`) — Exponential backoff with jitter for transient failures (timeouts, connection errors, 408/425/429/5xx); honours the server's `Retry-After`
 - 💾 **Resume support** (`-c`) — Continue interrupted downloads; the remote file is checked (`ETag`/`Last-Modified`) so a changed file restarts instead of being corrupted
 - 🛡️ **Safe partial files** — data is written to `name.part` and renamed only when complete, so a failed download never damages an existing file
-- 📂 **Default Downloads folder** — Files automatically save to `~/Downloads`
+- 📂 **Current directory by default** — Like `wget`/`curl`; `-d`/`--downloads` saves to the platform Downloads folder instead
 - ⚙️ **Configuration file** — Set defaults in `~/.config/rget/config.toml`
 - 🔐 **SHA‑256 checksum verification** (`--sha256`) — The finished file is checked *before* it is put in place, so a download that does not match replaces nothing and leaves nothing behind
 - 📄 **Existing files** (`--if-exists`, `-n`) — Overwrite (the default), skip, or keep both by numbering the new one: `file (1).zip`
@@ -84,7 +84,7 @@ sudo mv rget /usr/local/bin/
 ```bash
 rget https://example.com/file.zip
 ```
-**File saves to:** `~/Downloads/file.zip`
+**File saves to:** `./file.zip` (the current directory, like `wget`/`curl`)
 
 > **Quote URLs that contain `&`, `;`, `(`, `)` or `$`.** Your shell interprets them before rget ever runs (an unquoted `&` sends the command to the background and cuts the URL short):
 > ```bash
@@ -99,6 +99,11 @@ rget -O custom.zip https://example.com/file.zip
 ### Custom output directory
 ```bash
 rget -P ~/Documents https://example.com/file.zip
+```
+
+### Save to the Downloads folder instead of the current directory
+```bash
+rget -d https://example.com/file.zip
 ```
 
 ### Resume an interrupted download
@@ -201,6 +206,7 @@ resume = false            # Resume downloads by default
 limit_rate = 1048576      # 1 MB/s rate limit
 segments = 1              # Number of parallel segments for a single file
 # directory_prefix = "/path/to/downloads"  # Default output directory
+# downloads = false        # Save to the platform Downloads folder instead of the current directory
 # allow_private = false   # Allow loopback, private and link-local addresses
 # if_exists = "overwrite" # When the file exists: "overwrite", "skip" or "rename"
 ```

@@ -34,6 +34,7 @@ pub struct Config {
     pub limit_rate: Option<usize>,
     pub segments: Option<usize>,
     pub directory_prefix: Option<String>,
+    pub downloads: Option<bool>,
     pub allow_private: Option<bool>,
     pub if_exists: Option<IfExists>,
 }
@@ -107,6 +108,7 @@ resume = false
 # limit_rate = 1048576  # bytes per second; unset means no limit
 segments = 1          # Number of parallel segments for a single file
 # directory_prefix = "/path/to/downloads"
+# downloads = false      # save to the platform Downloads folder instead of the current directory
 # allow_private = false   # set to true to allow loopback, private and link-local addresses
 # if_exists = "overwrite" # when the file exists: "overwrite", "skip" or "rename"
 "#;

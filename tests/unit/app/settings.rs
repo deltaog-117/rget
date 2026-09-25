@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 use clap::Parser;
 use rget::app::cli::{Args, IfExists};
 use rget::app::config::Config;
@@ -26,7 +25,12 @@ const URL: &str = "https://example.com/f.zip";
 const HELLO: &str = "6e39426dd10db18f88f5c6b6be808b8d9f12929cd03b6ac41dba112de33ef099";
 
 fn parse(extra: &[&str]) -> Result<Args, clap::Error> {
-    Args::try_parse_from(["rget"].into_iter().chain(extra.iter().copied()).chain([URL]))
+    Args::try_parse_from(
+        ["rget"]
+            .into_iter()
+            .chain(extra.iter().copied())
+            .chain([URL]),
+    )
 }
 
 fn args(extra: &[&str]) -> Args {
@@ -51,9 +55,15 @@ fn an_existing_file_is_overwritten_unless_told_otherwise() {
 #[test]
 fn the_command_line_chooses_the_policy() {
     let none = Config::default();
-    assert_eq!(policy(&["--if-exists", "overwrite"], &none), ExistingFile::Overwrite);
+    assert_eq!(
+        policy(&["--if-exists", "overwrite"], &none),
+        ExistingFile::Overwrite
+    );
     assert_eq!(policy(&["--if-exists", "skip"], &none), ExistingFile::Skip);
-    assert_eq!(policy(&["--if-exists", "rename"], &none), ExistingFile::Rename);
+    assert_eq!(
+        policy(&["--if-exists", "rename"], &none),
+        ExistingFile::Rename
+    );
     assert_eq!(policy(&["-n"], &none), ExistingFile::Skip);
     assert_eq!(policy(&["--no-clobber"], &none), ExistingFile::Skip);
 }
@@ -73,7 +83,10 @@ fn the_config_file_supplies_a_default_and_the_command_line_beats_it() {
     let cfg = config("if_exists = \"rename\"");
     assert_eq!(policy(&[], &cfg), ExistingFile::Rename);
     assert_eq!(policy(&["--if-exists", "skip"], &cfg), ExistingFile::Skip);
-    assert_eq!(policy(&["--if-exists", "overwrite"], &cfg), ExistingFile::Overwrite);
+    assert_eq!(
+        policy(&["--if-exists", "overwrite"], &cfg),
+        ExistingFile::Overwrite
+    );
 }
 
 #[test]
@@ -85,8 +98,15 @@ fn a_bad_value_in_the_config_file_is_rejected_by_the_parser() {
 
 #[test]
 fn resuming_together_with_skip_or_rename_on_the_command_line_is_a_conflict() {
-    for extra in [&["-c", "-n"][..], &["-c", "--if-exists", "skip"], &["-c", "--if-exists", "rename"]] {
-        assert!(Settings::resume_conflict(&args(extra)).is_some(), "{extra:?}");
+    for extra in [
+        &["-c", "-n"][..],
+        &["-c", "--if-exists", "skip"],
+        &["-c", "--if-exists", "rename"],
+    ] {
+        assert!(
+            Settings::resume_conflict(&args(extra)).is_some(),
+            "{extra:?}"
+        );
     }
 }
 
@@ -116,15 +136,41 @@ fn an_explicit_skip_beats_resume_set_in_the_config_file() {
 
 #[test]
 fn the_choice_is_exposed_as_the_cli_enum_too() {
-    assert_eq!(args(&["--if-exists", "rename"]).if_exists, Some(IfExists::Rename));
+    assert_eq!(
+        args(&["--if-exists", "rename"]).if_exists,
+        Some(IfExists::Rename)
+    );
     assert_eq!(args(&[]).if_exists, None);
+}
+
+// ---- -d / --downloads --------------------------------------------------------------------
+
+#[test]
+fn downloads_is_off_by_default() {
+    assert!(!Settings::resolve(&args(&[]), &Config::default()).downloads);
+}
+
+#[test]
+fn the_downloads_flag_turns_it_on() {
+    assert!(Settings::resolve(&args(&["-d"]), &Config::default()).downloads);
+    assert!(Settings::resolve(&args(&["--downloads"]), &Config::default()).downloads);
+}
+
+#[test]
+fn the_config_file_can_turn_it_on_too() {
+    let cfg = config("downloads = true");
+    assert!(Settings::resolve(&args(&[]), &cfg).downloads);
 }
 
 // ---- --sha256 --------------------------------------------------------------------------------------
 
 #[test]
 fn a_digest_is_accepted_in_either_case_and_as_a_pasted_sha256sum_line() {
-    for value in [HELLO.to_string(), HELLO.to_uppercase(), format!("{HELLO}  f.zip")] {
+    for value in [
+        HELLO.to_string(),
+        HELLO.to_uppercase(),
+        format!("{HELLO}  f.zip"),
+    ] {
         let parsed = args(&["--sha256", &value]).sha256.unwrap();
         assert_eq!(parsed.to_hex(), HELLO, "{value}");
     }
@@ -134,6 +180,9 @@ fn a_digest_is_accepted_in_either_case_and_as_a_pasted_sha256sum_line() {
 fn a_malformed_digest_is_a_usage_error_before_any_download() {
     for value in ["deadbeef", "", "not-a-digest", &"g".repeat(64)] {
         let err = parse(&["--sha256", value]).unwrap_err();
-        assert!(err.to_string().contains("64 hexadecimal digits"), "{value}: {err}");
+        assert!(
+            err.to_string().contains("64 hexadecimal digits"),
+            "{value}: {err}"
+        );
     }
 }

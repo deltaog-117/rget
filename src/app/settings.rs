@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Merges CLI arguments and the config file into one resolved set of settings.
 
 use super::cli::{Args, IfExists};
@@ -37,6 +36,7 @@ pub struct Settings {
     pub limit_rate: Option<usize>,
     pub segments: usize,
     pub directory_prefix: Option<String>,
+    pub downloads: bool,
     pub headers: Vec<(String, String)>,
     pub allow_private: bool,
     pub if_exists: ExistingFile,
@@ -44,7 +44,11 @@ pub struct Settings {
 
 /// The policy the user asked for on the command line, if any.
 fn cli_policy(args: &Args) -> Option<IfExists> {
-    if args.no_clobber { Some(IfExists::Skip) } else { args.if_exists }
+    if args.no_clobber {
+        Some(IfExists::Skip)
+    } else {
+        args.if_exists
+    }
 }
 
 fn keeps_existing(choice: Option<IfExists>) -> bool {
@@ -55,8 +59,9 @@ impl Settings {
     /// `-c` continues the existing file, which `skip` and `rename` would refuse to touch, so the
     /// two cannot be asked for together on the command line.
     pub fn resume_conflict(args: &Args) -> Option<&'static str> {
-        (args.resume && keeps_existing(cli_policy(args)))
-            .then_some("-c (resume) cannot be combined with --no-clobber or --if-exists skip/rename")
+        (args.resume && keeps_existing(cli_policy(args))).then_some(
+            "-c (resume) cannot be combined with --no-clobber or --if-exists skip/rename",
+        )
     }
 
     pub fn resolve(args: &Args, config: &Config) -> Self {
@@ -72,7 +77,10 @@ impl Settings {
         Self {
             timeout: args.timeout.unwrap_or_else(|| config.timeout.unwrap_or(30)),
             retries: args.retries.unwrap_or_else(|| config.retries.unwrap_or(0)),
-            user_agent: args.user_agent.clone().or_else(|| config.user_agent.clone()),
+            user_agent: args
+                .user_agent
+                .clone()
+                .or_else(|| config.user_agent.clone()),
             quiet: args.quiet || config.quiet.unwrap_or(false),
             jobs: args.jobs.unwrap_or_else(|| config.jobs.unwrap_or(1)),
             follow_redirects: args
@@ -90,6 +98,7 @@ impl Settings {
                 .as_ref()
                 .or(config.directory_prefix.as_ref())
                 .cloned(),
+            downloads: args.downloads || config.downloads.unwrap_or(false),
             headers: parse_headers(&args.header),
             allow_private: args.allow_private || config.allow_private.unwrap_or(false),
             if_exists,
@@ -98,7 +107,11 @@ impl Settings {
 
     /// Whether local and private destinations may be contacted (`--allow-private`).
     pub fn host_policy(&self) -> HostPolicy {
-        if self.allow_private { HostPolicy::AllowPrivate } else { HostPolicy::BlockPrivate }
+        if self.allow_private {
+            HostPolicy::AllowPrivate
+        } else {
+            HostPolicy::BlockPrivate
+        }
     }
 
     /// The subset of settings the download feature cares about. The verifier and the

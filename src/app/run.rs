@@ -126,6 +126,7 @@ pub fn run() -> Result<()> {
             &base_name,
             settings.directory_prefix.as_deref(),
             args.output.is_some(),
+            settings.downloads,
         )?;
         let placement = claims
             .lock()
@@ -164,9 +165,12 @@ pub fn run() -> Result<()> {
         }
         if let Some(prefix) = &settings.directory_prefix {
             eprintln!("📂 Output directory: {}", prefix);
-        } else if args.output.is_none() && settings.directory_prefix.is_none() {
+        } else if args.output.is_none() && settings.downloads {
             if let Some(download_dir) = destination::default_download_dir() {
-                eprintln!("📂 Default output directory: {}", download_dir.display());
+                eprintln!(
+                    "📂 Output directory: {} (--downloads)",
+                    download_dir.display()
+                );
             }
         }
         if !settings.headers.is_empty() {

@@ -26,6 +26,7 @@
 | 2026-09-20 | Verifying a checksum | Verify before putting in place, via a hook; delete on mismatch | ✅ Confirmed |
 | 2026-09-25 | Handling Ctrl+C | `ctrlc` crate + one shared flag checked in `stream::copy` | ✅ Confirmed |
 | 2026-09-25 | Cancelling sibling segments | Shared `AtomicBool`, set on any segment's terminal failure, checked in `stream::copy` | ✅ Confirmed |
+| 2026-09-25 | Default output location | Current directory (matches `wget`/`curl`); `-d`/`--downloads` opts into `~/Downloads` | ✅ Confirmed |
 
 ---
 
@@ -1356,6 +1357,91 @@ where they add coupling.
 
 - `ROADMAP.md`, items D6, D7, D8, D10
 - `$SUITE/4iteration.md` (COA-table rule), `$SUITE/2engineering.md` (no silent failures, type-driven design)
+
+---
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-09-25 | Initial entry | deltaog-117 |
+
+---
+
+### Cycle 9: Default Output Location — Current Directory, not `~/Downloads`
+
+**Date:** 2026-09-25
+**Status:** ✅ Confirmed
+
+---
+
+#### Context / Background
+
+1.0.0 shipped defaulting every download to the platform Downloads folder (`~/Downloads`)
+when neither `-P` nor `-O` was given. Comparing that against `wget` and `curl` while
+discussing the low-priority backlog surfaced that neither of them do this: both save to
+the current directory by default (`curl` writes to stdout unless `-O`/`-o` is given at
+all). The Downloads-folder default is a desktop/browser convention, not a Unix
+command-line one, and rget explicitly bills itself as a `wget`/`curl` alternative.
+
+The question was whether to keep the existing default or switch to match the tools rget
+positions itself against, with whichever one loses the default kept easily reachable
+through its own flag.
+
+---
+
+#### Options Considered
+
+**Option A: Default to the current directory (`wget`/`curl` convention); `-d`/`--downloads` opts into `~/Downloads`**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Matches the two tools rget is explicitly an alternative to, so behaviour transfers for anyone switching <br> • Consistent with every other Unix CLI tool (`cp`, `tar`, `git clone`, …), which all write into the current directory unless told otherwise <br> • The mechanism already existed (`output_path`'s prefix/explicit-output branches); this only reorders which branch is the fallback and gates the old fallback behind a flag |
+| **Disadvantages** | • Breaking change to an already-released 1.0.0 default; any existing script or habit relying on files landing in `~/Downloads` now gets them in whatever directory it happened to run from |
+| **Implementation Difficulty** | Small |
+| **Fit with Constraints** | Best — matches the tool's own stated purpose |
+
+**Option B: Keep `~/Downloads` as the default (status quo)**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • No breaking change <br> • Arguably friendlier for a casual/interactive user: `rget <url>` from inside a git repo or `/etc` never drops a file there |
+| **Disadvantages** | • Inconsistent with the two tools rget markets itself as an alternative to <br> • `wget`'s decades of real-world use show the "safety" argument for a fixed folder is weak in practice — CWD-default has never been considered a footgun for it |
+| **Implementation Difficulty** | None |
+| **Fit with Constraints** | Poor — optimizes for a scenario (accidental clutter) neither `wget` nor `curl` users report as a problem |
+
+---
+
+#### Decision & Rationale
+
+**Chosen Option:** A, picked by the user from the two alternatives discussed above.
+
+**How it works:**
+- `destination::output_path` gained a fourth parameter, `use_downloads: bool`. Precedence is unchanged for `-P` (always wins) and an explicit `-O` (used as given); what changed is the fallback when neither is given: `use_downloads` now gates the platform-Downloads branch, and the current directory (the bare file name) is the new unconditional fallback below it, instead of the other way around.
+- `-d`/`--downloads` (CLI) and `downloads` (`config.toml`) both set the new `Settings::downloads` field the same way every other CLI-then-config-then-default field is resolved (`args.downloads || config.downloads.unwrap_or(false)`).
+- The verbose (`-v`) output line that used to announce the Downloads folder unconditionally now only prints an output-directory line when `-d`/`downloads` is actually in effect (or `-P` is given); the plain current-directory default is not announced, matching how `wget`/`curl` say nothing about it either.
+
+**Trade-offs accepted:**
+- This is a breaking change to a 1.0.0 default, not a purely additive feature. It is called out with a `**BREAKING:**` line in the changelog (not folded quietly into a patch-looking bullet), and the pending release is now flagged in `ROADMAP.md` as semver-major rather than the previously planned `1.1.0`.
+- No fake/injectable Downloads directory exists for testing, so the `use_downloads: true` branch is unit-tested against whatever `dirs::download_dir()` actually returns on the machine running the tests (matching the pre-existing convention in this test file, which never tested the old unconditional Downloads-folder branch directly either) rather than against a fixed, known path.
+
+---
+
+#### Implementation Notes
+
+> - `features/destination/location.rs`: `output_path` takes `use_downloads: bool`; current directory is the fallback, gated behind `use_downloads` for the platform-Downloads branch.
+> - `app/cli.rs`: new `-d`/`--downloads` flag.
+> - `app/config.rs`: new `downloads: Option<bool>` field; `write_default_config` documents it, commented out.
+> - `app/settings.rs`: new `Settings::downloads`, resolved CLI-then-config like every other boolean setting.
+> - `app/run.rs`: passes `settings.downloads` into `output_path`; the verbose output-directory line only fires for `-P` or an active `-d`/`downloads`.
+> - `README.md`: features list, quick-start example and configuration sample updated to describe the new default and `-d`.
+
+---
+
+#### References
+
+- Conversation with the user comparing rget's 1.0.0 default against `wget`/`curl`'s actual behaviour
+- `$SUITE/2engineering.md` (type-driven design — the new bool is threaded through the same resolution path as every other setting, not special-cased)
 
 ---
 

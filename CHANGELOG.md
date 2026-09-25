@@ -31,8 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ctrl+C is now caught: every download path stops between chunks, prints an interrupt notice once, and exits `130`, leaving the `.part` file and its sidecar in place for `-c` to continue
 - `scripts/check`, a thin wrapper around `cargo clippy -- -D warnings` and `cargo test` (`cargo fmt --check` is left out until roadmap item G formats the existing codebase)
 - Tests for the input-file comment/whitespace handling, the `-j 0` clamp, the permanent-connect-failure classification, and a segmented download whose sibling fails permanently
+- `-d`/`--downloads` (and `downloads` in the config file) saves to the platform Downloads folder; `-P` still wins over it
 
 ### Changed
+- **BREAKING:** with no `-P`, `-O` or `-d`, a download now saves to the current directory instead of `~/Downloads`, matching `wget` and `curl`. Anyone who relied on the old default should add `-d` (or `downloads = true` in `config.toml`) to keep the previous behaviour
 - Restructured the source tree from a flat `src/` into a feature-first layout: `app/` (CLI, config, settings merge, wiring), `features/{download,validation,integrity,input,destination}/`, and `shared/` (progress bar, size parsing). `main.rs` is now a thin entry point. No user-visible behaviour change; verified identical to 1.0.0 across 65 end-to-end cases.
 - `RgetError` split into per-feature error types (`download`, `validation`, `integrity`) aggregated by `AppError`; error messages and the `Error: …` output on failure are unchanged
 - The checksum step now verifies the path the download actually wrote to, instead of recomputing it
