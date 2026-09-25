@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! The host policy while downloading: redirects and DNS names that lead somewhere local or
 //! private are refused. (The initial URL is `validation`'s concern, so a loopback test server
 //! can stand in for "a host that was let through".)
@@ -44,10 +43,19 @@ fn a_redirect_into_a_private_address_is_refused_and_never_followed() {
     let dir = scratch_dir("hosts-redirect");
     let out = dir.join("out.bin");
 
-    let err = download_file(&format!("{base}/redirect"), out.to_str().unwrap(), &guarded(), None).unwrap_err();
+    let err = download_file(
+        &format!("{base}/redirect"),
+        out.to_str().unwrap(),
+        &guarded(),
+        None,
+    )
+    .unwrap_err();
 
     let message = message_of(err);
-    assert!(message.contains("redirect to") && message.contains("127.0.0.1"), "{message}");
+    assert!(
+        message.contains("redirect to") && message.contains("127.0.0.1"),
+        "{message}"
+    );
     assert_eq!(stats.hits(), 1, "the redirect target must not be requested");
     assert!(!out.exists());
     std::fs::remove_dir_all(dir).unwrap();
@@ -60,10 +68,19 @@ fn a_redirect_to_the_cloud_metadata_address_is_refused_without_connecting() {
     let out = dir.join("out.bin");
 
     let started = Instant::now();
-    let err = download_file(&format!("{base}/redirect-metadata"), out.to_str().unwrap(), &guarded(), None).unwrap_err();
+    let err = download_file(
+        &format!("{base}/redirect-metadata"),
+        out.to_str().unwrap(),
+        &guarded(),
+        None,
+    )
+    .unwrap_err();
 
     assert!(message_of(err).contains("169.254.169.254"));
-    assert!(started.elapsed() < Duration::from_secs(2), "no connection attempt should have been made");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "no connection attempt should have been made"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -74,7 +91,13 @@ fn allowing_private_hosts_follows_the_same_redirect() {
     let dir = scratch_dir("hosts-allowed");
     let out = dir.join("out.bin");
 
-    download_file(&format!("{base}/redirect"), out.to_str().unwrap(), &options(), None).unwrap();
+    download_file(
+        &format!("{base}/redirect"),
+        out.to_str().unwrap(),
+        &options(),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
     std::fs::remove_dir_all(dir).unwrap();
@@ -89,10 +112,19 @@ fn a_refused_address_is_not_retried() {
     opts.retries = 3;
 
     let started = Instant::now();
-    assert!(download_file(&format!("{base}/redirect"), out.to_str().unwrap(), &opts, None).is_err());
+    assert!(download_file(
+        &format!("{base}/redirect"),
+        out.to_str().unwrap(),
+        &opts,
+        None
+    )
+    .is_err());
 
     assert_eq!(stats.hits(), 1);
-    assert!(started.elapsed() < Duration::from_millis(900), "no backoff should have been slept");
+    assert!(
+        started.elapsed() < Duration::from_millis(900),
+        "no backoff should have been slept"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -104,7 +136,13 @@ fn a_name_that_always_means_this_machine_is_refused_before_any_lookup() {
     let url = base.replace("127.0.0.1", "localhost");
     assert!(url.contains("localhost"), "{url}");
 
-    let err = download_file(&format!("{url}/file"), out.to_str().unwrap(), &guarded(), None).unwrap_err();
+    let err = download_file(
+        &format!("{url}/file"),
+        out.to_str().unwrap(),
+        &guarded(),
+        None,
+    )
+    .unwrap_err();
 
     assert!(message_of(err).contains("localhost"));
     assert_eq!(stats.hits(), 0, "the server must never have been contacted");
@@ -119,7 +157,13 @@ fn allowing_private_hosts_reaches_a_local_name() {
     let out = dir.join("out.bin");
     let url = base.replace("127.0.0.1", "localhost");
 
-    download_file(&format!("{url}/file"), out.to_str().unwrap(), &options(), None).unwrap();
+    download_file(
+        &format!("{url}/file"),
+        out.to_str().unwrap(),
+        &options(),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
     std::fs::remove_dir_all(dir).unwrap();
@@ -133,10 +177,19 @@ fn a_segmented_download_is_guarded_too() {
     let mut opts = guarded();
     opts.segments = 3;
 
-    let err = download_file(&format!("{base}/redirect"), out.to_str().unwrap(), &opts, None).unwrap_err();
+    let err = download_file(
+        &format!("{base}/redirect"),
+        out.to_str().unwrap(),
+        &opts,
+        None,
+    )
+    .unwrap_err();
 
     assert!(matches!(err, Error::BlockedAddress(_)), "got {err:?}");
     assert!(!out.exists());
-    assert!(stats.hits() <= 2, "only the probe and the single-connection fallback may have reached the server");
+    assert!(
+        stats.hits() <= 2,
+        "only the probe and the single-connection fallback may have reached the server"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }

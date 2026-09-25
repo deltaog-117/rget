@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 use super::{options, payload, scratch_dir, serve, serve_with};
 use rget::features::download::{download_file, Error};
 use std::time::{Duration, Instant};
@@ -29,11 +28,20 @@ fn a_permanent_error_is_not_retried() {
     opts.retries = 3;
 
     let started = Instant::now();
-    let err = download_file(&format!("{base}/status/404"), out.to_str().unwrap(), &opts, None).unwrap_err();
+    let err = download_file(
+        &format!("{base}/status/404"),
+        out.to_str().unwrap(),
+        &opts,
+        None,
+    )
+    .unwrap_err();
 
     assert!(matches!(err, Error::HttpStatus { .. }));
     assert_eq!(stats.hits(), 1, "a 404 must not be retried");
-    assert!(started.elapsed() < Duration::from_millis(900), "no backoff should have been slept");
+    assert!(
+        started.elapsed() < Duration::from_millis(900),
+        "no backoff should have been slept"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -46,7 +54,13 @@ fn a_transient_status_is_retried_until_it_succeeds() {
     let mut opts = options();
     opts.retries = 2;
 
-    download_file(&format!("{base}/once/503"), out.to_str().unwrap(), &opts, None).unwrap();
+    download_file(
+        &format!("{base}/once/503"),
+        out.to_str().unwrap(),
+        &opts,
+        None,
+    )
+    .unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
     assert_eq!(stats.hits(), 2);
@@ -65,7 +79,13 @@ fn retry_after_is_honoured() {
     // /once/429 says "Retry-After: 1"; the plain backoff for the first retry is also about
     // a second, so this checks the floor rather than the exact value.
     let started = Instant::now();
-    download_file(&format!("{base}/once/429"), out.to_str().unwrap(), &opts, None).unwrap();
+    download_file(
+        &format!("{base}/once/429"),
+        out.to_str().unwrap(),
+        &opts,
+        None,
+    )
+    .unwrap();
 
     assert!(started.elapsed() >= Duration::from_secs(1));
     assert_eq!(std::fs::read(&out).unwrap(), data);
@@ -81,10 +101,19 @@ fn an_unreasonably_long_retry_after_gives_up_at_once() {
     opts.retries = 3;
 
     let started = Instant::now();
-    let err = download_file(&format!("{base}/long/503"), out.to_str().unwrap(), &opts, None).unwrap_err();
+    let err = download_file(
+        &format!("{base}/long/503"),
+        out.to_str().unwrap(),
+        &opts,
+        None,
+    )
+    .unwrap_err();
 
     match err {
-        Error::HttpStatus { status, retry_after } => {
+        Error::HttpStatus {
+            status,
+            retry_after,
+        } => {
             assert_eq!(status.as_u16(), 503);
             assert_eq!(retry_after, Some(Duration::from_secs(300)));
         }
@@ -104,11 +133,21 @@ fn a_dropped_connection_is_resumed_not_restarted() {
     let mut opts = options();
     opts.retries = 2;
 
-    download_file(&format!("{base}/dropmid"), out.to_str().unwrap(), &opts, None).unwrap();
+    download_file(
+        &format!("{base}/dropmid"),
+        out.to_str().unwrap(),
+        &opts,
+        None,
+    )
+    .unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
     assert_eq!(stats.hits(), 2);
-    assert_eq!(stats.ranged(), 1, "the retry should ask only for the missing bytes");
+    assert_eq!(
+        stats.ranged(),
+        1,
+        "the retry should ask only for the missing bytes"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -121,7 +160,13 @@ fn a_dropped_connection_on_a_server_without_ranges_restarts_cleanly() {
     let mut opts = options();
     opts.retries = 2;
 
-    download_file(&format!("{base}/dropmid"), out.to_str().unwrap(), &opts, None).unwrap();
+    download_file(
+        &format!("{base}/dropmid"),
+        out.to_str().unwrap(),
+        &opts,
+        None,
+    )
+    .unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
     std::fs::remove_dir_all(dir).unwrap();

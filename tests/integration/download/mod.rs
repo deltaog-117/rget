@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Shared fixtures for the download tests: a tiny in-process HTTP server.
 //!
 //! The download feature does not validate URLs (that is `validation`'s job), so it can
@@ -35,9 +34,12 @@
 //! - `/trickle`: the payload in ten pieces, 300 ms apart
 //! - `/stall`: half the payload, then silence
 //! - `/guarded`: like `/file`, but 403 unless the request carries `X-Token: ok` and `User-Agent: probe/1`
+//! - `/slowfail`: like `/file`, but a range starting in the low half trickles out 300 ms
+//!   apart and one starting in the high half is refused with a permanent `403`
 
 mod hosts;
 mod placement;
+mod pool;
 mod resume;
 mod retry;
 mod segmented;
@@ -119,7 +121,11 @@ pub(crate) fn serve(payload: Vec<u8>, ranges: bool) -> String {
 pub(crate) fn serve_with(payload: Vec<u8>, ranges: bool, etag: &str) -> (String, Arc<Stats>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let config = Arc::new(Config { payload, ranges, etag: etag.to_string() });
+    let config = Arc::new(Config {
+        payload,
+        ranges,
+        etag: etag.to_string(),
+    });
     let stats = Arc::new(Stats::default());
     let seen: Arc<Mutex<HashMap<String, usize>>> = Arc::default();
     let shared = stats.clone();
@@ -143,7 +149,12 @@ fn respond(stream: &mut TcpStream, status: &str, extra: &str, body: &[u8], head_
     }
 }
 
-fn handle(mut stream: TcpStream, config: &Config, stats: &Stats, seen: &Mutex<HashMap<String, usize>>) {
+fn handle(
+    mut stream: TcpStream,
+    config: &Config,
+    stats: &Stats,
+    seen: &Mutex<HashMap<String, usize>>,
+) {
     let mut request = Vec::new();
     let mut buf = [0u8; 1024];
     while !request.windows(4).any(|w| w == b"\r\n\r\n") {
@@ -167,7 +178,10 @@ fn handle(mut stream: TcpStream, config: &Config, stats: &Stats, seen: &Mutex<Ha
     let range = header("range: bytes=");
     let if_range = text
         .lines()
-        .find_map(|l| l.strip_prefix("If-Range: ").or_else(|| l.strip_prefix("if-range: ")))
+        .find_map(|l| {
+            l.strip_prefix("If-Range: ")
+                .or_else(|| l.strip_prefix("if-range: "))
+        })
         .map(|v| v.trim().to_string());
 
     stats.hits.fetch_add(1, Ordering::SeqCst);
@@ -190,7 +204,11 @@ fn handle(mut stream: TcpStream, config: &Config, stats: &Stats, seen: &Mutex<Ha
             drop_high_range = true;
         }
         "/guarded" => {
-            effective = if has("x-token: ok") && has("user-agent: probe/1") { "/file" } else { "/forbidden" };
+            effective = if has("x-token: ok") && has("user-agent: probe/1") {
+                "/file"
+            } else {
+                "/forbidden"
+            };
         }
         "/dropmid" => {
             if times_seen("dropmid") == 1 {
@@ -208,8 +226,18 @@ fn handle(mut stream: TcpStream, config: &Config, stats: &Stats, seen: &Mutex<Ha
         p if p.starts_with("/once/") => {
             if times_seen(p) == 1 {
                 let code: u16 = p["/once/".len()..].parse().unwrap();
-                let extra = if code == 429 { "Retry-After: 1\r\n" } else { "" };
-                respond(&mut stream, &format!("{code} Test"), extra, b"try again", head_only);
+                let extra = if code == 429 {
+                    "Retry-After: 1\r\n"
+                } else {
+                    ""
+                };
+                respond(
+                    &mut stream,
+                    &format!("{code} Test"),
+                    extra,
+                    b"try again",
+                    head_only,
+                );
                 return;
             }
             effective = "/file";
@@ -224,7 +252,13 @@ fn handle(mut stream: TcpStream, config: &Config, stats: &Stats, seen: &Mutex<Ha
 
     let payload = &config.payload;
     match effective {
-        "/redirect" => respond(&mut stream, "302 Found", "Location: /file\r\n", &[], head_only),
+        "/redirect" => respond(
+            &mut stream,
+            "302 Found",
+            "Location: /file\r\n",
+            &[],
+            head_only,
+        ),
         "/redirect-metadata" => respond(
             &mut stream,
             "302 Found",
@@ -233,7 +267,13 @@ fn handle(mut stream: TcpStream, config: &Config, stats: &Stats, seen: &Mutex<Ha
             head_only,
         ),
         "/forbidden" => respond(&mut stream, "403 Forbidden", "", b"forbidden", head_only),
-        "/long/503" => respond(&mut stream, "503 Test", "Retry-After: 300\r\n", b"later", head_only),
+        "/long/503" => respond(
+            &mut stream,
+            "503 Test",
+            "Retry-After: 300\r\n",
+            b"later",
+            head_only,
+        ),
         "/lying" => respond(
             &mut stream,
             "200 OK",
@@ -244,16 +284,27 @@ fn handle(mut stream: TcpStream, config: &Config, stats: &Stats, seen: &Mutex<Ha
         "/file" => {
             let etag_line = format!("ETag: {}\r\n", config.etag);
             // A validator that no longer matches means: ignore the Range, send everything.
-            let honour_range = config.ranges && if_range.as_deref().is_none_or(|v| v == config.etag);
+            let honour_range =
+                config.ranges && if_range.as_deref().is_none_or(|v| v == config.etag);
             match range {
                 Some(spec) if honour_range => {
                     let (start, end) = spec.split_once('-').unwrap();
                     let start: usize = start.parse().unwrap();
                     if start >= payload.len() {
                         let extra = format!("Content-Range: bytes */{}\r\n", payload.len());
-                        respond(&mut stream, "416 Range Not Satisfiable", &extra, &[], head_only);
+                        respond(
+                            &mut stream,
+                            "416 Range Not Satisfiable",
+                            &extra,
+                            &[],
+                            head_only,
+                        );
                     } else {
-                        let end: usize = if end.is_empty() { payload.len() - 1 } else { end.parse().unwrap() };
+                        let end: usize = if end.is_empty() {
+                            payload.len() - 1
+                        } else {
+                            end.parse().unwrap()
+                        };
                         let end = end.min(payload.len() - 1);
                         let extra = format!(
                             "{etag_line}Content-Range: bytes {}-{}/{}\r\nAccept-Ranges: bytes\r\n",
@@ -262,27 +313,111 @@ fn handle(mut stream: TcpStream, config: &Config, stats: &Stats, seen: &Mutex<Ha
                             payload.len()
                         );
                         let body = &payload[start..=end];
-                        if drop_high_range && start >= payload.len() / 2 && times_seen("dropseg") == 1 {
+                        if drop_high_range
+                            && start >= payload.len() / 2
+                            && times_seen("dropseg") == 1
+                        {
                             let head = format!(
                                 "HTTP/1.1 206 Partial Content\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n",
                                 body.len()
                             );
                             let _ = stream.write_all(head.as_bytes());
                             let _ = stream.write_all(&body[..body.len() / 2]);
+                            // The other segment's own request is on loopback and unthrottled,
+                            // so it finishes in a few milliseconds; delaying the close of this
+                            // one keeps a test that expects it to have already finished from
+                            // racing that segment's cancellation (D10) under a loaded machine.
+                            thread::sleep(Duration::from_millis(300));
                             return;
                         }
                         respond(&mut stream, "206 Partial Content", &extra, body, head_only);
                     }
                 }
                 _ => {
-                    let accept = if config.ranges { "Accept-Ranges: bytes\r\n" } else { "" };
-                    respond(&mut stream, "200 OK", &format!("{etag_line}{accept}"), payload, head_only);
+                    let accept = if config.ranges {
+                        "Accept-Ranges: bytes\r\n"
+                    } else {
+                        ""
+                    };
+                    respond(
+                        &mut stream,
+                        "200 OK",
+                        &format!("{etag_line}{accept}"),
+                        payload,
+                        head_only,
+                    );
+                }
+            }
+        }
+        "/slowfail" => {
+            let etag_line = format!("ETag: {}\r\n", config.etag);
+            match range {
+                Some(spec) if config.ranges => {
+                    let (start, end) = spec.split_once('-').unwrap();
+                    let start: usize = start.parse().unwrap();
+                    let end: usize = if end.is_empty() {
+                        payload.len() - 1
+                    } else {
+                        end.parse().unwrap()
+                    };
+                    let end = end.min(payload.len() - 1);
+                    if start >= payload.len() / 2 {
+                        // The high half is refused outright, and permanently: this is the
+                        // segment meant to end the whole download.
+                        respond(&mut stream, "403 Forbidden", "", b"forbidden", head_only);
+                    } else {
+                        let body = &payload[start..=end];
+                        let extra = format!(
+                            "{etag_line}Content-Range: bytes {}-{}/{}\r\nAccept-Ranges: bytes\r\n",
+                            start,
+                            end,
+                            payload.len()
+                        );
+                        if head_only {
+                            respond(&mut stream, "206 Partial Content", &extra, body, true);
+                        } else {
+                            // The low half trickles out, so a test can tell whether it kept
+                            // going to completion or stopped as soon as the high half failed.
+                            let head = format!(
+                                "HTTP/1.1 206 Partial Content\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            let _ = stream.write_all(head.as_bytes());
+                            for chunk in body.chunks(body.len().div_ceil(6).max(1)) {
+                                if stream.write_all(chunk).is_err() {
+                                    return;
+                                }
+                                let _ = stream.flush();
+                                thread::sleep(Duration::from_millis(300));
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    let accept = if config.ranges {
+                        "Accept-Ranges: bytes\r\n"
+                    } else {
+                        ""
+                    };
+                    respond(
+                        &mut stream,
+                        "200 OK",
+                        &format!("{etag_line}{accept}"),
+                        payload,
+                        head_only,
+                    );
                 }
             }
         }
         p if p.starts_with("/status/") => {
             let code: u16 = p["/status/".len()..].parse().unwrap();
-            respond(&mut stream, &format!("{code} Test"), "", b"error page", head_only);
+            respond(
+                &mut stream,
+                &format!("{code} Test"),
+                "",
+                b"error page",
+                head_only,
+            );
         }
         _ => respond(&mut stream, "404 Not Found", "", b"not found", head_only),
     }

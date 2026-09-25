@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 use rget::features::input::read_url_list;
 
 #[test]
@@ -27,13 +26,17 @@ fn blank_and_whitespace_only_lines_are_skipped() {
     std::fs::remove_file(path).unwrap();
 }
 
-// Characterization of 1.0.0; roadmap item D6 trims lines and skips `#` comments.
+// Roadmap item D6.
 #[test]
-fn known_defect_lines_are_not_trimmed_and_comments_are_kept() {
+fn lines_are_trimmed_and_comments_are_skipped() {
     let path = std::env::temp_dir().join(format!("rget-urls-raw-{}", std::process::id()));
-    std::fs::write(&path, "  http://a.example/1 \n# comment\n").unwrap();
+    std::fs::write(
+        &path,
+        "  http://a.example/1 \n# comment\n  # indented comment\nhttp://b.example/2\n",
+    )
+    .unwrap();
     let urls = read_url_list(path.to_str().unwrap()).unwrap();
-    assert_eq!(urls, vec!["  http://a.example/1 ", "# comment"]);
+    assert_eq!(urls, vec!["http://a.example/1", "http://b.example/2"]);
     std::fs::remove_file(path).unwrap();
 }
 

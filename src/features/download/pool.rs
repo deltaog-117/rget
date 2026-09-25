@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Parallel downloads of several URLs (`-j`).
 
 use super::download_file;
@@ -32,7 +31,8 @@ use std::thread;
 /// `on_result` is called on the calling thread as each task finishes, in
 /// completion order, with the URL, its output path, and the outcome.
 ///
-/// FIXME(D): with `jobs == 0` no worker exists and this blocks forever.
+/// `jobs == 0` is treated as 1: no worker would otherwise ever start, and every task's
+/// result would wait forever.
 pub fn run_pool<F>(
     tasks: Vec<(String, String)>,
     jobs: usize,
@@ -42,6 +42,7 @@ pub fn run_pool<F>(
 ) where
     F: FnMut(String, String, Result<Outcome>),
 {
+    let jobs = jobs.max(1);
     let total = tasks.len();
     let (task_sender, task_receiver) = unbounded::<(String, String)>();
     let (result_sender, result_receiver) = unbounded::<(String, String, Result<Outcome>)>();

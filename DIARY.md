@@ -25,6 +25,7 @@
 | 2026-09-20 | Existing files (no-clobber) | `--if-exists overwrite\|skip\|rename`, default unchanged | ✅ Confirmed |
 | 2026-09-20 | Verifying a checksum | Verify before putting in place, via a hook; delete on mismatch | ✅ Confirmed |
 | 2026-09-25 | Handling Ctrl+C | `ctrlc` crate + one shared flag checked in `stream::copy` | ✅ Confirmed |
+| 2026-09-25 | Cancelling sibling segments | Shared `AtomicBool`, set on any segment's terminal failure, checked in `stream::copy` | ✅ Confirmed |
 
 ---
 
@@ -1253,6 +1254,108 @@ path streams through.
 
 - `ROADMAP.md`, items D1–D5
 - `$SUITE/4iteration.md` (COA-table rule), `$SUITE/2engineering.md` (no silent failures, no comments for "what")
+
+---
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-09-25 | Initial entry | deltaog-117 |
+
+---
+
+### Cycle 8: Low-Priority Fixes (D6, D7, D8, D10)
+
+**Date:** 2026-09-25
+**Status:** ✅ Confirmed
+
+---
+
+#### Context / Background
+
+The user picked four items from the roadmap's low-priority list (`D6`–`D15`) rather than
+following the "Next Actions" suggestion to cut the 1.1.0 release (`G`) first: `D6`
+(`-i` lines are not trimmed and `#` comments are kept as URLs), `D7` (`-j 0` starts no
+worker thread, so the result loop waits forever), `D8` (a connection failure is always
+retried, even a DNS name that will never resolve or a certificate that will never
+validate), and `D10` (a segment that exhausts its retries fails the download, but its
+siblings keep downloading to completion before the failure is reported, wasting
+bandwidth on a result that gets discarded).
+
+`D6`, `D7` and `D8` were single-approach, mostly single-file fixes, so they went in
+without a COA table per `4iteration.md`. `D10` was the one genuine design point: it
+needs state shared between segment threads, and the obvious ways to plumb it differ in
+where they add coupling.
+
+---
+
+#### Options Considered (D10 only)
+
+**Option A: One shared `AtomicBool` on the segments' common `Shared` struct, checked in `stream::copy`**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Mirrors the existing Ctrl+C design (`shared::interrupt`): one flag, checked once per chunk in the loop every download path already streams through <br> • No new dependency <br> • A segment that has not started its HTTP request yet also checks it, so a doomed segment does not even open a connection |
+| **Disadvantages** | • Segmented-download-specific state living on `segmented::Shared` rather than something more general |
+| **Implementation Difficulty** | Small |
+| **Fit with Constraints** | Best |
+
+**Option B: A `crossbeam_channel` broadcast, one receiver per segment**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Same crate `pool.rs` already depends on, so no new dependency either <br> • A channel reads naturally as an event rather than a flag |
+| **Disadvantages** | • A broadcast-to-many pattern needs either a channel per receiver (fanned out by the spawning loop) or a `Sender` cloned and a `try_recv` polled every chunk — more code than one atomic load for the same outcome <br> • Nothing about the problem is really an event stream; it is a single fact ("has anything failed yet?") that stays true forever once set, which an atomic flag models directly |
+| **Implementation Difficulty** | Medium |
+| **Fit with Constraints** | Worse for the same result |
+
+**Option C: The main thread polls `JoinHandle::is_finished()` on the other handles and aborts**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • No change to `stream::copy` or `fetch_segment` at all |
+| **Disadvantages** | • Rust threads cannot be aborted from outside; "stopping" a segment still means it has to notice something itself, so this does not actually avoid adding a checked flag <br> • Would need a polling loop on the main thread instead of an immediate signal from the failing thread |
+| **Implementation Difficulty** | Medium |
+| **Fit with Constraints** | Does not actually solve the problem |
+
+---
+
+#### Decision & Rationale
+
+**Chosen Option:** A.
+
+**How it works:**
+- **`D6`:** `collect_urls` now trims each line and drops it when it is empty or starts with `#`, after decoding, instead of only checking for blank lines.
+- **`D7`:** `run_pool` clamps `jobs` to `jobs.max(1)` before spawning workers, so `-j 0` behaves like `-j 1` instead of starting no worker and leaving the result channel's `recv()` blocked forever.
+- **`D8`:** `client::is_unrecoverable_connect_failure` walks a `reqwest::Error`'s source chain for the underlying `std::io::Error` once `is_connect()` is true, and treats it as unrecoverable when `raw_os_error()` is `None`. An OS-level connection failure (refused, timed out, reset, unreachable) always carries the kernel's own error number; a resolver failure (`getaddrinfo`'s own error space, not errno) and a TLS certificate rejection (raised by `rustls` itself) never do. `retry::is_retryable` calls it alongside the existing `is_builder()`/`is_redirect()` checks.
+- **`D10`:** `segmented::Shared` gained a `cancelled: AtomicBool`. Each segment's thread closure stores `true` into it once its own `retry::run` returns any `Err` (a genuine failure or a `RangesUnsupported` fallback — both already discard every part and end the whole attempt, so there is nothing to gain by letting a sibling run on). `fetch_segment` checks it before opening a connection, and `stream::copy` takes an `Option<&AtomicBool>` it checks alongside the Ctrl+C flag between chunks, returning a new `Error::Cancelled` that is not retried and is not printed as its own failure (the sibling that actually failed already is).
+
+**Trade-offs accepted:**
+- A segment that is seconds from finishing on its own can now be interrupted by an unrelated sibling's fast permanent failure. This was accepted deliberately: the whole download fails either way once any segment gives up for good, so finishing that segment's transfer would only be discarded work. Its part file is left exactly where a normal interruption would leave it, valid for a later `-c`.
+- `D8`'s classifier trusts the absence of a raw OS error number as the signal, rather than downcasting to a specific `rustls::Error` variant or matching resolver error text. This is deliberately conservative in the safe direction: anything it cannot positively identify as a local/resolver/TLS failure falls through to "retryable" (the pre-existing behaviour), so the worst case of a wrong guess is an unnecessary retry, never a request that should have been retried being dropped.
+
+---
+
+#### Implementation Notes
+
+> - `features/input/url_list.rs`: `collect_urls` trims and filters `#`-prefixed lines.
+> - `features/download/pool.rs`: `run_pool` clamps `jobs` to at least 1.
+> - `features/download/client.rs`: new `is_unrecoverable_connect_failure`, next to the existing `refusal_in` chain-walker.
+> - `features/download/retry.rs`: `is_retryable` calls the new classifier; `Error::Cancelled` added to the non-retryable arm and to the "already announced, don't print again" exclusion.
+> - `features/download/error.rs`: new `Error::Cancelled` variant.
+> - `features/download/stream.rs`: `copy` takes `cancelled: Option<&AtomicBool>`, checked alongside `interrupt::requested()`.
+> - `features/download/segmented.rs`: `Shared.cancelled`; set by each segment's thread closure on any `Err`; checked at the top of `fetch_segment` and passed into `stream::copy`; the join loop treats `Error::Cancelled` like `Error::Interrupted` (no duplicate `❌ Part N` line).
+> - `features/download/single.rs`: passes `None` for the new `stream::copy` parameter (a single connection has no siblings to cancel).
+> - Test server (`tests/integration/download/mod.rs`) gained a `/slowfail` route (low half trickles, high half returns a permanent `403`) to prove a sibling segment is actually cancelled, not just that the download still fails; the pre-existing `/dropseg` route gained a deliberate 300ms delay before closing its dropped connection, since `D10` means a fast permanent failure can now race a fast, unrelated success on the other segment where before the two never interacted.
+> - `scripts/check` (new): `cargo clippy --all-targets -- -D warnings` and `cargo test`, deliberately without `cargo fmt --check` until roadmap item G formats the codebase.
+
+---
+
+#### References
+
+- `ROADMAP.md`, items D6, D7, D8, D10
+- `$SUITE/4iteration.md` (COA-table rule), `$SUITE/2engineering.md` (no silent failures, type-driven design)
 
 ---
 

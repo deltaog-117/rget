@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! What happens when the target is occupied at the moment the finished download is put in place.
 
 use super::{options, payload, scratch_dir, serve};
@@ -43,7 +42,10 @@ fn part_files(dir: &Path) -> Vec<String> {
 /// Offers `alternatives` one after another, remembering what it was asked to replace.
 fn relocating(alternatives: Vec<PathBuf>) -> (OnOccupied, Arc<Mutex<Vec<String>>>) {
     let asked: Arc<Mutex<Vec<String>>> = Arc::default();
-    let (record, queue) = (asked.clone(), Arc::new(Mutex::new(alternatives.into_iter())));
+    let (record, queue) = (
+        asked.clone(),
+        Arc::new(Mutex::new(alternatives.into_iter())),
+    );
     let pick: Relocate = Arc::new(move |occupied| {
         record.lock().unwrap().push(occupied.to_string());
         queue.lock().unwrap().next().map(|p| text(&p))
@@ -59,7 +61,13 @@ fn replace_is_the_default_and_overwrites_the_existing_file() {
     let out = dir.join("out.bin");
     std::fs::write(&out, b"old").unwrap();
 
-    let outcome = download_file(&format!("{base}/file"), out.to_str().unwrap(), &options(), None).unwrap();
+    let outcome = download_file(
+        &format!("{base}/file"),
+        out.to_str().unwrap(),
+        &options(),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(outcome, Outcome::Saved(text(&out)));
     assert_eq!(std::fs::read(&out).unwrap(), data);
@@ -75,7 +83,8 @@ fn a_free_target_is_used_directly_whatever_the_policy() {
     opts.on_occupied = OnOccupied::Skip;
     let out = dir.join("out.bin");
 
-    let outcome = download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
+    let outcome =
+        download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
 
     assert_eq!(outcome, Outcome::Saved(text(&out)));
     assert_eq!(std::fs::read(&out).unwrap(), data);
@@ -92,11 +101,15 @@ fn skip_keeps_the_existing_file_and_discards_the_download() {
     let mut opts = options();
     opts.on_occupied = OnOccupied::Skip;
 
-    let outcome = download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
+    let outcome =
+        download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
 
     assert_eq!(outcome, Outcome::Skipped(text(&out)));
     assert_eq!(std::fs::read(&out).unwrap(), b"keep me");
-    assert!(part_files(&dir).is_empty(), "the discarded download leaves nothing behind");
+    assert!(
+        part_files(&dir).is_empty(),
+        "the discarded download leaves nothing behind"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -112,7 +125,8 @@ fn relocate_saves_under_the_alternative_and_keeps_the_existing_file() {
     let mut opts = options();
     opts.on_occupied = policy;
 
-    let outcome = download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
+    let outcome =
+        download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
 
     assert_eq!(outcome, Outcome::Saved(text(&alternative)));
     assert_eq!(std::fs::read(&alternative).unwrap(), data);
@@ -127,18 +141,26 @@ fn relocate_is_asked_again_when_the_alternative_is_taken_too() {
     let data = payload(4_000);
     let base = serve(data.clone(), true);
     let dir = scratch_dir("place-relocate-twice");
-    let (out, first, second) = (dir.join("out.bin"), dir.join("out (1).bin"), dir.join("out (2).bin"));
+    let (out, first, second) = (
+        dir.join("out.bin"),
+        dir.join("out (1).bin"),
+        dir.join("out (2).bin"),
+    );
     std::fs::write(&out, b"one").unwrap();
     std::fs::write(&first, b"two").unwrap();
     let (policy, asked) = relocating(vec![first.clone(), second.clone()]);
     let mut opts = options();
     opts.on_occupied = policy;
 
-    let outcome = download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
+    let outcome =
+        download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
 
     assert_eq!(outcome, Outcome::Saved(text(&second)));
     assert_eq!(std::fs::read(&first).unwrap(), b"two");
-    assert_eq!(asked.lock().unwrap().as_slice(), &[text(&out), text(&first)]);
+    assert_eq!(
+        asked.lock().unwrap().as_slice(),
+        &[text(&out), text(&first)]
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -152,7 +174,8 @@ fn relocate_giving_up_discards_the_download() {
     let mut opts = options();
     opts.on_occupied = policy;
 
-    let outcome = download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
+    let outcome =
+        download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
 
     assert_eq!(outcome, Outcome::Skipped(text(&out)));
     assert_eq!(std::fs::read(&out).unwrap(), b"keep me");
@@ -178,7 +201,13 @@ fn a_file_that_appears_while_downloading_is_never_overwritten_under_skip() {
     let mut opts = options();
     opts.on_occupied = OnOccupied::Skip;
 
-    let outcome = download_file(&format!("{base}/trickle"), out.to_str().unwrap(), &opts, None).unwrap();
+    let outcome = download_file(
+        &format!("{base}/trickle"),
+        out.to_str().unwrap(),
+        &opts,
+        None,
+    )
+    .unwrap();
     creator.join().unwrap();
 
     assert_eq!(outcome, Outcome::Skipped(text(&out)));
@@ -199,7 +228,13 @@ fn a_file_that_appears_while_downloading_is_never_overwritten_under_relocate() {
     let mut opts = options();
     opts.on_occupied = policy;
 
-    let outcome = download_file(&format!("{base}/trickle"), out.to_str().unwrap(), &opts, None).unwrap();
+    let outcome = download_file(
+        &format!("{base}/trickle"),
+        out.to_str().unwrap(),
+        &opts,
+        None,
+    )
+    .unwrap();
     creator.join().unwrap();
 
     assert_eq!(outcome, Outcome::Saved(text(&alternative)));
@@ -216,10 +251,20 @@ fn the_default_policy_still_replaces_a_file_that_appears_meanwhile() {
     let out = dir.join("out.bin");
     let creator = create_after_a_second(out.clone());
 
-    download_file(&format!("{base}/trickle"), out.to_str().unwrap(), &options(), None).unwrap();
+    download_file(
+        &format!("{base}/trickle"),
+        out.to_str().unwrap(),
+        &options(),
+        None,
+    )
+    .unwrap();
     creator.join().unwrap();
 
-    assert_eq!(std::fs::read(&out).unwrap(), data, "overwrite means overwrite");
+    assert_eq!(
+        std::fs::read(&out).unwrap(),
+        data,
+        "overwrite means overwrite"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -233,10 +278,15 @@ fn segmented_downloads_honour_the_policy_too() {
     opts.segments = 3;
     opts.on_occupied = OnOccupied::Skip;
 
-    let outcome = download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
+    let outcome =
+        download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
 
     assert_eq!(outcome, Outcome::Skipped(text(&out)));
     assert_eq!(std::fs::read(&out).unwrap(), b"keep me");
-    assert!(part_files(&dir).is_empty(), "left over: {:?}", part_files(&dir));
+    assert!(
+        part_files(&dir).is_empty(),
+        "left over: {:?}",
+        part_files(&dir)
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }

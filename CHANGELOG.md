@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tests for digest parsing, name claiming, option merging, verification before placement, and a file appearing while a download runs
 - The progress bar now shows a smoothed transfer rate, and a download whose size is unknown ahead of time (no `Content-Length`) gets its own spinner display instead of a bar with a meaningless ETA
 - Ctrl+C is now caught: every download path stops between chunks, prints an interrupt notice once, and exits `130`, leaving the `.part` file and its sidecar in place for `-c` to continue
+- `scripts/check`, a thin wrapper around `cargo clippy -- -D warnings` and `cargo test` (`cargo fmt --check` is left out until roadmap item G formats the existing codebase)
+- Tests for the input-file comment/whitespace handling, the `-j 0` clamp, the permanent-connect-failure classification, and a segmented download whose sibling fails permanently
 
 ### Changed
 - Restructured the source tree from a flat `src/` into a feature-first layout: `app/` (CLI, config, settings merge, wiring), `features/{download,validation,integrity,input,destination}/`, and `shared/` (progress bar, size parsing). `main.rs` is now a thin entry point. No user-visible behaviour change; verified identical to 1.0.0 across 65 end-to-end cases.
@@ -64,6 +66,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - URL validation now judges the parsed URL instead of blacklisting characters in its text. The checks are: `http`/`https` only; a hostname made of letters, digits, `.`, `-` and `_`; no `..` path segment (in any encoding, including `\` and `%2f`); and no well-known secret file (`.env`, `.bashrc`, `.zshrc`, `etc/passwd`, `etc/shadow`, `etc/sudoers`, `.git/config`, `.aws/credentials`, `.ssh/id_rsa`, `.ssh/authorized_keys`) as whole decoded path segments. Only the path is examined for traversal and secret files; the host, query and fragment are not
 - The error for a secret-file URL now names the file (`Access to sensitive file '.env'`) instead of showing a regular expression, and an invalid hostname names the offending character
 - The URL is now parsed and its scheme checked before the content checks run, so `ftp://x/a;b` reports the scheme
+- A connection failure is retried only when it might heal: a DNS name that does not exist and a TLS certificate that fails validation now fail immediately instead of waiting through `-r`'s backoff, judged by the absence of an OS error number underneath the failure (an ordinary refused or timed-out connection always has one)
+- A segment that exhausts its retries now sets a flag its siblings check between chunks, so they stop instead of finishing a transfer whose result is discarded anyway; their part files are left exactly as before, valid for a later `-c`
 
 ### Removed
 - The `regex` dependency, no longer needed by URL validation
@@ -95,6 +99,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - One invalid URL in a batch of several no longer aborts every other URL in the same run: it is now reported and skipped, and the rest still download
 - `main` now reports a failure through `Display` (a clean one-line message) instead of the default runtime's raw `Error: {:?}` dump
 - The default `User-Agent` now reflects the crate's actual version (`rget/1.0.0`) instead of the hardcoded, stale `rget/0.1.0`
+- `-i`/`--input-file` lines are now trimmed of surrounding whitespace, and a line whose first non-whitespace character is `#` is treated as a comment and skipped, matching `curl`/`wget`
+- `-j 0` no longer hangs forever waiting for a result no worker thread was ever started to produce: it is now treated as `1`
 
 ### Security
 - A redirect from an allowed host to a loopback, private or link-local address, and a hostname that resolves to one, used to be followed, so a URL could make rget read an internal service (a local one was read back and written to disk in testing). Both are now refused, including for segmented downloads

@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Single-connection download attempt.
 
 use super::client;
@@ -61,7 +60,11 @@ pub(super) fn attempt(
         target.discard_partial();
     }
 
-    let source = if resume_wanted { target.resume_source(options.resume) } else { None };
+    let source = if resume_wanted {
+        target.resume_source(options.resume)
+    } else {
+        None
+    };
     let saved_meta = PartMeta::read(target.meta_path());
     // A sidecar only describes `name.part`; it says nothing about a file we are adopting.
     let meta_for_plan = match source {
@@ -70,15 +73,30 @@ pub(super) fn attempt(
     };
     let plan = resume::plan(source.map_or(0, |(_, len)| len), meta_for_plan, url);
 
-    let job = Job { url, output_path, options, target: &target, multi_progress };
+    let job = Job {
+        url,
+        output_path,
+        options,
+        target: &target,
+        multi_progress,
+    };
     fetch(&job, source.map(|(s, _)| s), saved_meta.as_ref(), plan)
 }
 
-fn fetch(job: &Job, source: Option<Source>, saved_meta: Option<&PartMeta>, plan: Plan) -> Result<Outcome> {
+fn fetch(
+    job: &Job,
+    source: Option<Source>,
+    saved_meta: Option<&PartMeta>,
+    plan: Plan,
+) -> Result<Outcome> {
     let options = job.options;
     let quiet = options.quiet;
     let started = Instant::now();
-    let client = client::build(options.timeout, options.follow_redirects, options.host_policy)?;
+    let client = client::build(
+        options.timeout,
+        options.follow_redirects,
+        options.host_policy,
+    )?;
 
     let mut request_builder = client.get(job.url);
     if let Plan::Continue { from, if_range } = &plan {
@@ -87,8 +105,11 @@ fn fetch(job: &Job, source: Option<Source>, saved_meta: Option<&PartMeta>, plan:
             request_builder = request_builder.header(IF_RANGE, validator);
         }
     }
-    let request_builder =
-        client::apply_headers(request_builder, options.user_agent.as_deref(), &options.headers);
+    let request_builder = client::apply_headers(
+        request_builder,
+        options.user_agent.as_deref(),
+        &options.headers,
+    );
 
     let response = request_builder.send()?;
 
@@ -165,16 +186,27 @@ fn fetch(job: &Job, source: Option<Source>, saved_meta: Option<&PartMeta>, plan:
     }
 
     let mut file = if appending {
-        OpenOptions::new().append(true).create(true).open(job.target.work_path())?
+        OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(job.target.work_path())?
     } else {
-        OpenOptions::new().write(true).create(true).truncate(true).open(job.target.work_path())?
+        OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(job.target.work_path())?
     };
 
     if job.target.is_staged() {
         let meta = PartMeta::from_headers(job.url, response.headers(), total).inherit(saved_meta);
         if let Err(e) = meta.write(job.target.meta_path()) {
             // Only costs the ability to validate a later resume.
-            log::debug!("could not write {}: {}", job.target.meta_path().display(), e);
+            log::debug!(
+                "could not write {}: {}",
+                job.target.meta_path().display(),
+                e
+            );
         }
     }
 
@@ -191,12 +223,24 @@ fn fetch(job: &Job, source: Option<Source>, saved_meta: Option<&PartMeta>, plan:
     };
 
     let mut throttle = Throttle::new(options.limit_rate);
-    let written = stream::copy(&mut response, &mut file, &mut throttle, options.timeout, |n| {
-        if let Some(ref p) = progress {
-            p.inc(n);
-        }
-    })?;
-    log::debug!("{} bytes written to {} in {:?}", written, job.target.work_path().display(), started.elapsed());
+    let written = stream::copy(
+        &mut response,
+        &mut file,
+        &mut throttle,
+        options.timeout,
+        None,
+        |n| {
+            if let Some(ref p) = progress {
+                p.inc(n);
+            }
+        },
+    )?;
+    log::debug!(
+        "{} bytes written to {} in {:?}",
+        written,
+        job.target.work_path().display(),
+        started.elapsed()
+    );
 
     // Checked before anything is put in place, so a bad download replaces nothing.
     job.target.verify(options.verify.as_ref())?;

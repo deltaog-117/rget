@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 use super::{options, payload, scratch_dir, serve};
 use rget::features::download::{download_file, Error};
 
@@ -26,7 +25,13 @@ fn downloads_the_whole_file() {
     let dir = scratch_dir("single-full");
     let out = dir.join("out.bin");
 
-    download_file(&format!("{base}/file"), out.to_str().unwrap(), &options(), None).unwrap();
+    download_file(
+        &format!("{base}/file"),
+        out.to_str().unwrap(),
+        &options(),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
     std::fs::remove_dir_all(dir).unwrap();
@@ -40,7 +45,13 @@ fn an_existing_file_is_overwritten_without_resume() {
     let out = dir.join("out.bin");
     std::fs::write(&out, vec![0u8; 50_000]).unwrap();
 
-    download_file(&format!("{base}/file"), out.to_str().unwrap(), &options(), None).unwrap();
+    download_file(
+        &format!("{base}/file"),
+        out.to_str().unwrap(),
+        &options(),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
     std::fs::remove_dir_all(dir).unwrap();
@@ -53,7 +64,13 @@ fn a_redirect_is_followed_by_default() {
     let dir = scratch_dir("single-redirect");
     let out = dir.join("out.bin");
 
-    download_file(&format!("{base}/redirect"), out.to_str().unwrap(), &options(), None).unwrap();
+    download_file(
+        &format!("{base}/redirect"),
+        out.to_str().unwrap(),
+        &options(),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
     std::fs::remove_dir_all(dir).unwrap();
@@ -67,8 +84,13 @@ fn a_redirect_is_an_error_when_following_is_disabled() {
     let mut opts = options();
     opts.follow_redirects = false;
 
-    let err = download_file(&format!("{base}/redirect"), out.to_str().unwrap(), &opts, None)
-        .unwrap_err();
+    let err = download_file(
+        &format!("{base}/redirect"),
+        out.to_str().unwrap(),
+        &opts,
+        None,
+    )
+    .unwrap_err();
 
     match err {
         Error::RedirectDisabled(status, location) => {
@@ -85,8 +107,13 @@ fn a_refused_connection_is_a_network_error() {
     let dir = scratch_dir("single-refused");
     let out = dir.join("out.bin");
 
-    let err = download_file("http://127.0.0.1:1/file", out.to_str().unwrap(), &options(), None)
-        .unwrap_err();
+    let err = download_file(
+        "http://127.0.0.1:1/file",
+        out.to_str().unwrap(),
+        &options(),
+        None,
+    )
+    .unwrap_err();
 
     assert!(matches!(err, Error::Network(_)));
     std::fs::remove_dir_all(dir).unwrap();
@@ -99,8 +126,13 @@ fn an_error_status_is_an_error_and_writes_nothing() {
         let dir = scratch_dir(&format!("single-status-{code}"));
         let out = dir.join("out.bin");
 
-        let err = download_file(&format!("{base}/status/{code}"), out.to_str().unwrap(), &options(), None)
-            .unwrap_err();
+        let err = download_file(
+            &format!("{base}/status/{code}"),
+            out.to_str().unwrap(),
+            &options(),
+            None,
+        )
+        .unwrap_err();
 
         match err {
             Error::HttpStatus { status, .. } => assert_eq!(status.as_u16(), code),
@@ -118,7 +150,13 @@ fn an_error_status_leaves_an_existing_file_untouched() {
     let out = dir.join("out.bin");
     std::fs::write(&out, b"precious").unwrap();
 
-    assert!(download_file(&format!("{base}/status/404"), out.to_str().unwrap(), &options(), None).is_err());
+    assert!(download_file(
+        &format!("{base}/status/404"),
+        out.to_str().unwrap(),
+        &options(),
+        None
+    )
+    .is_err());
 
     assert_eq!(std::fs::read(&out).unwrap(), b"precious");
     std::fs::remove_dir_all(dir).unwrap();
@@ -136,7 +174,13 @@ fn a_download_may_outlast_the_timeout_while_data_keeps_flowing() {
     opts.timeout = 1;
 
     let started = std::time::Instant::now();
-    download_file(&format!("{base}/trickle"), out.to_str().unwrap(), &opts, None).unwrap();
+    download_file(
+        &format!("{base}/trickle"),
+        out.to_str().unwrap(),
+        &opts,
+        None,
+    )
+    .unwrap();
 
     assert!(started.elapsed() > std::time::Duration::from_millis(2500));
     assert_eq!(std::fs::read(&out).unwrap(), data);
@@ -152,7 +196,8 @@ fn a_stalled_transfer_fails_after_the_timeout() {
     opts.timeout = 1;
 
     let started = std::time::Instant::now();
-    let err = download_file(&format!("{base}/stall"), out.to_str().unwrap(), &opts, None).unwrap_err();
+    let err =
+        download_file(&format!("{base}/stall"), out.to_str().unwrap(), &opts, None).unwrap_err();
 
     assert!(matches!(err, Error::Stalled(1)), "got {err:?}");
     assert!(started.elapsed() < std::time::Duration::from_secs(4));
@@ -172,8 +217,14 @@ fn the_rate_limit_slows_the_transfer() {
     download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
     let elapsed = started.elapsed();
 
-    assert!(elapsed > std::time::Duration::from_millis(900), "finished too fast: {elapsed:?}");
-    assert!(elapsed < std::time::Duration::from_secs(6), "finished too slowly: {elapsed:?}");
+    assert!(
+        elapsed > std::time::Duration::from_millis(900),
+        "finished too fast: {elapsed:?}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(6),
+        "finished too slowly: {elapsed:?}"
+    );
     assert_eq!(std::fs::read(&out).unwrap(), data);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -184,8 +235,18 @@ fn an_error_status_creates_no_part_file() {
     let dir = scratch_dir("single-status-nopart");
     let out = dir.join("out.bin");
 
-    assert!(download_file(&format!("{base}/status/500"), out.to_str().unwrap(), &options(), None).is_err());
+    assert!(download_file(
+        &format!("{base}/status/500"),
+        out.to_str().unwrap(),
+        &options(),
+        None
+    )
+    .is_err());
 
-    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "nothing should be left behind");
+    assert_eq!(
+        std::fs::read_dir(&dir).unwrap().count(),
+        0,
+        "nothing should be left behind"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }

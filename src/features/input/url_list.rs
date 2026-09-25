@@ -15,13 +15,15 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Reading URLs from a file or from stdin.
 
 use std::fs::File;
 use std::io::{stdin, BufRead, BufReader};
 
-/// Reads one URL per non-blank line from `source`; `"-"` means stdin.
+/// Reads one URL per line from `source`; `"-"` means stdin.
+///
+/// Each line is trimmed of surrounding whitespace; a blank line or one whose first
+/// non-whitespace character is `#` is treated as a comment and skipped.
 ///
 /// # Errors
 ///
@@ -44,6 +46,7 @@ fn collect_urls<R: BufRead>(reader: R) -> Vec<String> {
     reader
         .lines()
         .filter_map(|line| line.ok())
-        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .collect()
 }

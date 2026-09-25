@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 use super::{options, payload, scratch_dir, serve};
 use rget::features::download::{download_file, Error};
 
@@ -41,7 +40,10 @@ fn segments_are_reassembled_in_order() {
         download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
 
         assert_eq!(std::fs::read(&out).unwrap(), data, "segments = {segments}");
-        assert!(leftover_parts(&dir).is_empty(), "part files were not cleaned up");
+        assert!(
+            leftover_parts(&dir).is_empty(),
+            "part files were not cleaned up"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
@@ -69,7 +71,13 @@ fn an_unreachable_server_falls_back_and_then_fails() {
     let mut opts = options();
     opts.segments = 3;
 
-    assert!(download_file("http://127.0.0.1:1/file", out.to_str().unwrap(), &opts, None).is_err());
+    assert!(download_file(
+        "http://127.0.0.1:1/file",
+        out.to_str().unwrap(),
+        &opts,
+        None
+    )
+    .is_err());
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -84,7 +92,13 @@ fn the_probe_carries_the_custom_headers() {
     opts.user_agent = Some("probe/1".to_string());
     opts.headers = vec![("X-Token".to_string(), "ok".to_string())];
 
-    download_file(&format!("{base}/guarded"), out.to_str().unwrap(), &opts, None).unwrap();
+    download_file(
+        &format!("{base}/guarded"),
+        out.to_str().unwrap(),
+        &opts,
+        None,
+    )
+    .unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
     std::fs::remove_dir_all(dir).unwrap();
@@ -98,9 +112,18 @@ fn a_probe_without_the_headers_is_refused_and_reported() {
     let mut opts = options();
     opts.segments = 3;
 
-    let err = download_file(&format!("{base}/guarded"), out.to_str().unwrap(), &opts, None).unwrap_err();
+    let err = download_file(
+        &format!("{base}/guarded"),
+        out.to_str().unwrap(),
+        &opts,
+        None,
+    )
+    .unwrap_err();
 
-    assert!(matches!(err, Error::HttpStatus { status: s, .. } if s.as_u16() == 403), "got {err:?}");
+    assert!(
+        matches!(err, Error::HttpStatus { status: s, .. } if s.as_u16() == 403),
+        "got {err:?}"
+    );
     assert!(!out.exists());
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -114,9 +137,18 @@ fn the_probe_respects_a_disabled_redirect_policy() {
     opts.segments = 3;
     opts.follow_redirects = false;
 
-    let err = download_file(&format!("{base}/redirect"), out.to_str().unwrap(), &opts, None).unwrap_err();
+    let err = download_file(
+        &format!("{base}/redirect"),
+        out.to_str().unwrap(),
+        &opts,
+        None,
+    )
+    .unwrap_err();
 
-    assert!(matches!(err, Error::RedirectDisabled(302, _)), "got {err:?}");
+    assert!(
+        matches!(err, Error::RedirectDisabled(302, _)),
+        "got {err:?}"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -128,9 +160,18 @@ fn an_error_status_on_the_probe_is_reported_not_saved() {
     let mut opts = options();
     opts.segments = 3;
 
-    let err = download_file(&format!("{base}/status/404"), out.to_str().unwrap(), &opts, None).unwrap_err();
+    let err = download_file(
+        &format!("{base}/status/404"),
+        out.to_str().unwrap(),
+        &opts,
+        None,
+    )
+    .unwrap_err();
 
-    assert!(matches!(err, Error::HttpStatus { status: s, .. } if s.as_u16() == 404), "got {err:?}");
+    assert!(
+        matches!(err, Error::HttpStatus { status: s, .. } if s.as_u16() == 404),
+        "got {err:?}"
+    );
     assert!(!out.exists());
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -152,7 +193,11 @@ fn a_segmented_resume_continues_partial_parts_at_the_right_offset() {
     download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
-    assert!(leftover_parts(&dir).is_empty(), "leftover: {:?}", leftover_parts(&dir));
+    assert!(
+        leftover_parts(&dir).is_empty(),
+        "leftover: {:?}",
+        leftover_parts(&dir)
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -185,7 +230,10 @@ fn numbered_parts(dir: &Path) -> Vec<String> {
         .unwrap()
         .flatten()
         .map(|e| e.file_name().to_string_lossy().to_string())
-        .filter(|n| n.rsplit_once(".part").is_some_and(|(_, d)| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit())))
+        .filter(|n| {
+            n.rsplit_once(".part")
+                .is_some_and(|(_, d)| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+        })
         .collect();
     found.sort();
     found
@@ -210,7 +258,13 @@ fn a_failed_segment_is_retried_and_continues_where_it_stopped() {
     opts.segments = 2;
     opts.retries = 2;
 
-    download_file(&format!("{base}/dropseg"), out.to_str().unwrap(), &opts, None).unwrap();
+    download_file(
+        &format!("{base}/dropseg"),
+        out.to_str().unwrap(),
+        &opts,
+        None,
+    )
+    .unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
     // Segment 0 once, segment 1 twice: the retry asks only for the missing tail.
@@ -228,12 +282,24 @@ fn a_segment_that_fails_without_retries_fails_the_download_with_its_own_error() 
     let mut opts = options();
     opts.segments = 2;
 
-    let err = download_file(&format!("{base}/dropseg"), out.to_str().unwrap(), &opts, None).unwrap_err();
+    let err = download_file(
+        &format!("{base}/dropseg"),
+        out.to_str().unwrap(),
+        &opts,
+        None,
+    )
+    .unwrap_err();
 
-    assert!(matches!(err, Error::Network(_)), "expected the original error, got {err:?}");
+    assert!(
+        matches!(err, Error::Network(_)),
+        "expected the original error, got {err:?}"
+    );
     assert!(!out.exists());
     assert_eq!(numbered_parts(&dir), vec!["out.bin.part0", "out.bin.part1"]);
-    assert_eq!(std::fs::metadata(dir.join("out.bin.part0")).unwrap().len(), 150_008);
+    assert_eq!(
+        std::fs::metadata(dir.join("out.bin.part0")).unwrap().len(),
+        150_008
+    );
     let sidecar = std::fs::read_to_string(dir.join("out.bin.part.meta")).unwrap();
     assert!(sidecar.contains("segments = 2"), "sidecar: {sidecar}");
     std::fs::remove_dir_all(dir).unwrap();
@@ -275,7 +341,11 @@ fn a_different_segment_count_starts_over_instead_of_misaligning_the_parts() {
     download_file(&url, out.to_str().unwrap(), &resuming(3), None).unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
-    assert_eq!(stats.ranged(), 2 + 3, "all three new segments must be fetched from scratch");
+    assert_eq!(
+        stats.ranged(),
+        2 + 3,
+        "all three new segments must be fetched from scratch"
+    );
     assert!(numbered_parts(&dir).is_empty());
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -295,7 +365,13 @@ fn a_changed_remote_file_discards_the_parts() {
     )
     .unwrap();
 
-    download_file(&format!("{base}/file"), out.to_str().unwrap(), &resuming(2), None).unwrap();
+    download_file(
+        &format!("{base}/file"),
+        out.to_str().unwrap(),
+        &resuming(2),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), new);
     std::fs::remove_dir_all(dir).unwrap();
@@ -312,7 +388,11 @@ fn a_server_that_answers_200_to_range_requests_falls_back_to_one_connection() {
 
     download_file(&format!("{base}/lying"), out.to_str().unwrap(), &opts, None).unwrap();
 
-    assert_eq!(std::fs::read(&out).unwrap(), data, "the file must not contain three copies");
+    assert_eq!(
+        std::fs::read(&out).unwrap(),
+        data,
+        "the file must not contain three copies"
+    );
     assert!(numbered_parts(&dir).is_empty());
     assert!(!dir.join("out.bin.part.meta").exists());
     std::fs::remove_dir_all(dir).unwrap();
@@ -326,7 +406,13 @@ fn an_oversized_part_is_discarded_not_trusted() {
     let out = dir.join("out.bin");
     std::fs::write(dir.join("out.bin.part0"), vec![0xEE; 200_000]).unwrap();
 
-    download_file(&format!("{base}/file"), out.to_str().unwrap(), &resuming(2), None).unwrap();
+    download_file(
+        &format!("{base}/file"),
+        out.to_str().unwrap(),
+        &resuming(2),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
     std::fs::remove_dir_all(dir).unwrap();
@@ -346,7 +432,46 @@ fn leftover_parts_beyond_the_segment_count_are_deleted() {
     download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
-    assert!(numbered_parts(&dir).is_empty(), "left over: {:?}", numbered_parts(&dir));
+    assert!(
+        numbered_parts(&dir).is_empty(),
+        "left over: {:?}",
+        numbered_parts(&dir)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+// Roadmap item D10: a segment that exhausts its retries used to fail the download only
+// once every other segment finished on its own, wasting bandwidth on a result that gets
+// discarded. `/slowfail` refuses the high half permanently and trickles the low half out
+// over roughly 1.5s, so this proves the trickling segment is cancelled instead of running
+// to completion.
+#[test]
+fn a_permanently_failed_segment_cancels_its_siblings_instead_of_letting_them_finish() {
+    let data = payload(SEGMENTED_PAYLOAD);
+    let base = serve(data, true);
+    let dir = scratch_dir("seg-cancel-siblings");
+    let out = dir.join("out.bin");
+    let mut opts = options();
+    opts.segments = 2;
+
+    let started = std::time::Instant::now();
+    let err = download_file(
+        &format!("{base}/slowfail"),
+        out.to_str().unwrap(),
+        &opts,
+        None,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(err, Error::HttpStatus { status: s, .. } if s.as_u16() == 403),
+        "got {err:?}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(1200),
+        "the trickling segment was not cancelled: took {:?}",
+        started.elapsed()
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 

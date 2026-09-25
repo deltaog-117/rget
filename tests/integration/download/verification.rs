@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! A finished download is checked before it is put in place; a refusal replaces nothing.
 
 use super::{options, payload, scratch_dir, serve, serve_with};
@@ -56,11 +55,18 @@ fn a_download_that_fails_verification_replaces_nothing_and_leaves_nothing_behind
     let mut opts = options();
     opts.verify = Some(verify);
 
-    let err = download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap_err();
+    let err =
+        download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap_err();
 
-    assert!(matches!(&err, Error::Verification(m) if m.contains("expected a, got b")), "{err:?}");
+    assert!(
+        matches!(&err, Error::Verification(m) if m.contains("expected a, got b")),
+        "{err:?}"
+    );
     assert_eq!(std::fs::read(&out).unwrap(), b"the good file");
-    assert!(!part_of(&out).exists(), "a later -c must not find corrupt data to complete");
+    assert!(
+        !part_of(&out).exists(),
+        "a later -c must not find corrupt data to complete"
+    );
     assert!(!meta_of(&out).exists());
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -76,19 +82,29 @@ fn the_verifier_sees_the_finished_file_before_it_is_in_place() {
     let record = seen.clone();
     let mut opts = options();
     opts.verify = Some(Verifier::new(move |path| {
-        let complete = std::fs::read(path).map(|bytes| bytes == expected).unwrap_or(false);
+        let complete = std::fs::read(path)
+            .map(|bytes| bytes == expected)
+            .unwrap_or(false);
         let final_exists = path.with_extension("").exists();
-        record.lock().unwrap().push((path.to_path_buf(), complete, final_exists));
+        record
+            .lock()
+            .unwrap()
+            .push((path.to_path_buf(), complete, final_exists));
         Ok(())
     }));
 
-    let outcome = download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
+    let outcome =
+        download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
 
     assert_eq!(outcome, Outcome::Saved(out.to_string_lossy().to_string()));
     assert_eq!(std::fs::read(&out).unwrap(), data);
     let calls = seen.lock().unwrap();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].0, part_of(&out), "the staged file is what gets checked");
+    assert_eq!(
+        calls[0].0,
+        part_of(&out),
+        "the staged file is what gets checked"
+    );
     assert!(calls[0].1, "the verifier must see the complete file");
     assert!(!calls[0].2, "nothing may be in place yet");
     std::fs::remove_dir_all(dir).unwrap();
@@ -120,10 +136,15 @@ fn segmented_downloads_are_verified_too() {
     opts.verify = Some(verify);
     opts.segments = 3;
 
-    let err = download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap_err();
+    let err =
+        download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap_err();
 
     assert!(matches!(err, Error::Verification(_)), "{err:?}");
-    assert_eq!(seen.lock().unwrap().as_slice(), &[part_of(&out)], "the merged file is checked once");
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        &[part_of(&out)],
+        "the merged file is checked once"
+    );
     assert!(!out.exists() && !part_of(&out).exists());
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -136,7 +157,14 @@ fn a_complete_part_file_from_an_earlier_run_is_verified_before_it_is_accepted() 
     let out = dir.join("out.bin");
     let seed = |dir_out: &Path| {
         std::fs::write(part_of(dir_out), &data).unwrap();
-        std::fs::write(meta_of(dir_out), format!("url = \"{base}/file\"\netag = \"\\\"v1\\\"\"\ntotal = {}\n", data.len())).unwrap();
+        std::fs::write(
+            meta_of(dir_out),
+            format!(
+                "url = \"{base}/file\"\netag = \"\\\"v1\\\"\"\ntotal = {}\n",
+                data.len()
+            ),
+        )
+        .unwrap();
     };
     let mut opts = options();
     opts.resume = true;
@@ -144,7 +172,8 @@ fn a_complete_part_file_from_an_earlier_run_is_verified_before_it_is_accepted() 
     seed(&out);
     let (refuse, _) = verifier(Err("corrupt".into()));
     opts.verify = Some(refuse);
-    let err = download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap_err();
+    let err =
+        download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap_err();
     assert!(matches!(err, Error::Verification(_)), "{err:?}");
     assert!(!out.exists() && !part_of(&out).exists() && !meta_of(&out).exists());
 
@@ -168,10 +197,15 @@ fn an_existing_complete_file_that_fails_verification_is_reported_but_never_delet
     opts.resume = true;
     opts.verify = Some(verify);
 
-    let err = download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap_err();
+    let err =
+        download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap_err();
 
     assert!(matches!(err, Error::Verification(_)), "{err:?}");
-    assert_eq!(std::fs::read(&out).unwrap(), data, "a file this run did not produce is left alone");
+    assert_eq!(
+        std::fs::read(&out).unwrap(),
+        data,
+        "a file this run did not produce is left alone"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 

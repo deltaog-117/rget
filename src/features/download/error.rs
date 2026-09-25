@@ -63,6 +63,12 @@ pub enum Error {
     /// stopped transfer, so `-c` picks it up again.
     #[error("Interrupted")]
     Interrupted,
+
+    /// A sibling segment of the same download already failed for good; this one stopped as
+    /// soon as it noticed, instead of finishing a transfer whose result would be discarded
+    /// anyway. The sibling's own error is what gets reported.
+    #[error("Cancelled: a sibling segment already failed")]
+    Cancelled,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -63,6 +63,27 @@ pub(super) fn refusal_in(error: &reqwest::Error) -> Option<String> {
     None
 }
 
+/// Whether `error` is a connection failure that a retry cannot heal: a name that does not
+/// exist, or a certificate the TLS stack refuses to validate, as opposed to a connection
+/// that was refused, timed out or reset (which carries the kernel's own error number and
+/// may well succeed on a later attempt). `reqwest` reports both kinds as "could not
+/// connect", so this walks the error chain for the `io::Error` underneath and judges it by
+/// whether the OS gave a reason: a resolver or TLS failure is raised by the library itself
+/// with none, while every OS-level connection failure has one.
+pub(super) fn is_unrecoverable_connect_failure(error: &reqwest::Error) -> bool {
+    if !error.is_connect() {
+        return false;
+    }
+    let mut source: Option<&(dyn StdError + 'static)> = error.source();
+    while let Some(e) = source {
+        if let Some(io_error) = e.downcast_ref::<std::io::Error>() {
+            return io_error.raw_os_error().is_none();
+        }
+        source = e.source();
+    }
+    false
+}
+
 /// Why `url` must not be contacted, judged by its host alone: an IP literal that is not
 /// public, or a name that always means this machine. `None` means it may be.
 fn destination_refusal(url: &Url) -> Option<String> {
@@ -386,6 +407,33 @@ mod tests {
             .unwrap_err()
             .into();
         assert!(matches!(error, Error::Network(_)), "{error:?}");
+    }
+
+    #[test]
+    fn a_name_that_does_not_exist_is_an_unrecoverable_connect_failure() {
+        // ".invalid" is reserved by RFC 2606 to never resolve.
+        let error = reqwest::blocking::Client::new()
+            .get("http://no-such-host.invalid/")
+            .send()
+            .unwrap_err();
+        assert!(is_unrecoverable_connect_failure(&error), "{error}");
+    }
+
+    #[test]
+    fn a_refused_connection_is_not_an_unrecoverable_connect_failure() {
+        // Nothing listens on port 1, so this is a genuine, OS-reported refusal.
+        let error = reqwest::blocking::get("http://127.0.0.1:1/").unwrap_err();
+        assert!(!is_unrecoverable_connect_failure(&error), "{error}");
+    }
+
+    #[test]
+    fn a_non_connect_error_is_never_an_unrecoverable_connect_failure() {
+        let error = reqwest::blocking::Client::new()
+            .get("not a url")
+            .send()
+            .unwrap_err();
+        assert!(error.is_builder());
+        assert!(!is_unrecoverable_connect_failure(&error), "{error}");
     }
 
     #[test]

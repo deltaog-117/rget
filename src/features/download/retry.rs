@@ -26,11 +26,16 @@ const MAX_WAIT: Duration = Duration::from_secs(60);
 
 /// Whether `error` may go away on its own: stalls and transport failures, and the HTTP
 /// statuses that mean "try again" (the same set as `curl --retry`). Everything else
-/// (404, a disabled redirect, a full disk, a protocol violation) would fail identically.
+/// (404, a disabled redirect, a full disk, a protocol violation, a name that does not
+/// exist, a certificate that does not validate) would fail identically.
 pub(super) fn is_retryable(error: &Error) -> bool {
     match error {
         Error::Stalled(_) => true,
-        Error::Network(e) => !(e.is_builder() || e.is_redirect()),
+        Error::Network(e) => {
+            !(e.is_builder()
+                || e.is_redirect()
+                || super::client::is_unrecoverable_connect_failure(e))
+        }
         Error::HttpStatus { status, .. } => {
             matches!(status.as_u16(), 408 | 425 | 429 | 500 | 502 | 503 | 504)
         }
@@ -40,7 +45,8 @@ pub(super) fn is_retryable(error: &Error) -> bool {
         | Error::RangesUnsupported(_)
         | Error::BlockedAddress(_)
         | Error::Verification(_)
-        | Error::Interrupted => false,
+        | Error::Interrupted
+        | Error::Cancelled => false,
     }
 }
 
@@ -97,7 +103,13 @@ where
         if attempt >= max_attempts || !is_retryable(&e) {
             // "Ranges unsupported" is not a failure: the caller falls back to one connection.
             // "Interrupted" was already announced by the Ctrl+C handler itself.
-            if !quiet && !matches!(e, Error::RangesUnsupported(_) | Error::Interrupted) {
+            // "Cancelled" is collateral: the sibling segment that caused it reports the error.
+            if !quiet
+                && !matches!(
+                    e,
+                    Error::RangesUnsupported(_) | Error::Interrupted | Error::Cancelled
+                )
+            {
                 eprintln!("❌ {}Failed after {} attempts", label, attempt);
             }
             return Err(e);
@@ -171,6 +183,7 @@ mod tests {
         assert!(!is_retryable(&Error::BlockedAddress("127.0.0.1".into())));
         assert!(!is_retryable(&Error::Verification("bad digest".into())));
         assert!(!is_retryable(&Error::Interrupted));
+        assert!(!is_retryable(&Error::Cancelled));
     }
 
     #[test]
@@ -179,6 +192,16 @@ mod tests {
         // Nothing listens on port 1, so this is a genuine refused connection.
         let refused = reqwest::blocking::get("http://127.0.0.1:1/").unwrap_err();
         assert!(is_retryable(&Error::Network(refused)));
+    }
+
+    #[test]
+    fn a_name_that_does_not_exist_is_not_retried() {
+        // ".invalid" is reserved by RFC 2606 to never resolve (roadmap item D8).
+        let error = reqwest::blocking::Client::new()
+            .get("http://no-such-host.invalid/")
+            .send()
+            .unwrap_err();
+        assert!(!is_retryable(&Error::Network(error)));
     }
 
     #[test]

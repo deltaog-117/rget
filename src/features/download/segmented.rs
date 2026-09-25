@@ -39,6 +39,7 @@ use reqwest::header::{ACCEPT_RANGES, CONTENT_RANGE, IF_RANGE, RANGE};
 use reqwest::StatusCode;
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 
@@ -56,6 +57,9 @@ struct Shared {
     retries: u32,
     quiet: bool,
     progress: Option<ProgressBar>,
+    /// Set once any segment gives up for good, so the others stop instead of finishing a
+    /// transfer whose result will be discarded anyway (roadmap item D10).
+    cancelled: AtomicBool,
 }
 
 /// One attempt at one segment. Continues from whatever the part file already holds, so a
@@ -66,6 +70,10 @@ fn fetch_segment(
     part_path: &Path,
     (start, end): (u64, u64),
 ) -> Result<()> {
+    if shared.cancelled.load(Ordering::Relaxed) {
+        return Err(Error::Cancelled);
+    }
+
     let expected = end - start + 1;
     let mut have = fs::metadata(part_path).map(|m| m.len()).unwrap_or(0);
     if have > expected {
@@ -149,6 +157,7 @@ fn fetch_segment(
         &mut file,
         &mut throttle,
         shared.timeout,
+        Some(&shared.cancelled),
         |n| {
             if let Some(ref bar) = shared.progress {
                 bar.inc(n);
@@ -318,6 +327,7 @@ pub(super) fn download(
         retries: options.retries,
         quiet,
         progress: progress.as_ref().map(|p| p.get_bar().clone()),
+        cancelled: AtomicBool::new(false),
     });
 
     let handles: Vec<_> = ranges
@@ -329,9 +339,16 @@ pub(super) fn download(
             let part_path = part_paths[i].clone();
             thread::spawn(move || {
                 let label = format!("part {}: ", i);
-                retry::run(shared.retries, shared.quiet, &label, |_attempt| {
+                let result = retry::run(shared.retries, shared.quiet, &label, |_attempt| {
                     fetch_segment(&shared, i, &part_path, range)
-                })
+                });
+                // Once this segment has given up for good, the whole download is doomed
+                // (either a real failure, or a fallback that discards every part anyway),
+                // so the others should stop instead of finishing pointlessly.
+                if result.is_err() {
+                    shared.cancelled.store(true, Ordering::Relaxed);
+                }
+                result
             })
         })
         .collect();
@@ -349,6 +366,10 @@ pub(super) fn download(
             // would repeat the same message once for every segment still in flight.
             Ok(Err(Error::Interrupted)) => {
                 first_error.get_or_insert(Error::Interrupted);
+            }
+            // Collateral: the sibling segment that triggered this is reported instead.
+            Ok(Err(Error::Cancelled)) => {
+                log::debug!("part {} stopped: a sibling segment already failed", i);
             }
             Ok(Err(e)) => {
                 eprintln!("❌ Part {}: {}", i, e);

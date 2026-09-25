@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Tier 1 check: lint and tests. `cargo fmt --check` is deliberately left out until
+# roadmap item G lands (the whole codebase is not yet rustfmt-formatted; fixing that is
+# its own commit so blame stays readable, not folded into a feature check).
+set -euo pipefail
+
+cargo clippy --all-targets --quiet -- -D warnings
+cargo test --quiet

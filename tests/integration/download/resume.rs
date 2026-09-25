@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 use super::{options, payload, scratch_dir, serve};
 use rget::features::download::download_file;
 
@@ -101,7 +100,13 @@ fn a_finished_download_leaves_no_part_file_or_sidecar() {
     let dir = scratch_dir("resume-clean");
     let out = dir.join("out.bin");
 
-    download_file(&format!("{base}/file"), out.to_str().unwrap(), &options(), None).unwrap();
+    download_file(
+        &format!("{base}/file"),
+        out.to_str().unwrap(),
+        &options(),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
     assert!(!part_of(&out).exists());
@@ -117,7 +122,13 @@ fn resuming_a_complete_file_is_a_success_and_leaves_it_alone() {
     let out = dir.join("out.bin");
     std::fs::write(&out, &data).unwrap();
 
-    download_file(&format!("{base}/file"), out.to_str().unwrap(), &resuming(), None).unwrap();
+    download_file(
+        &format!("{base}/file"),
+        out.to_str().unwrap(),
+        &resuming(),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
     assert!(!part_of(&out).exists());
@@ -132,10 +143,20 @@ fn a_part_file_from_an_earlier_run_is_continued_after_validation() {
     let out = dir.join("out.bin");
     leave_partial(&out, &data[..70_000], &format!("{base}/file"), "\"v1\"");
 
-    download_file(&format!("{base}/file"), out.to_str().unwrap(), &resuming(), None).unwrap();
+    download_file(
+        &format!("{base}/file"),
+        out.to_str().unwrap(),
+        &resuming(),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
-    assert_eq!(stats.ranged(), 1, "the transfer should have continued, not restarted");
+    assert_eq!(
+        stats.ranged(),
+        1,
+        "the transfer should have continued, not restarted"
+    );
     assert!(!part_of(&out).exists() && !meta_of(&out).exists());
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -149,7 +170,13 @@ fn a_changed_remote_file_restarts_instead_of_producing_a_corrupt_file() {
     let out = dir.join("out.bin");
     leave_partial(&out, &old[..70_000], &format!("{base}/file"), "\"v1\"");
 
-    download_file(&format!("{base}/file"), out.to_str().unwrap(), &resuming(), None).unwrap();
+    download_file(
+        &format!("{base}/file"),
+        out.to_str().unwrap(),
+        &resuming(),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), new);
     std::fs::remove_dir_all(dir).unwrap();
@@ -161,9 +188,20 @@ fn a_part_file_belonging_to_another_url_is_not_continued() {
     let (base, stats) = serve_with(data.clone(), true, "\"v1\"");
     let dir = scratch_dir("resume-otherurl");
     let out = dir.join("out.bin");
-    leave_partial(&out, &vec![0xEE; 20_000], "http://example.invalid/other", "\"v1\"");
+    leave_partial(
+        &out,
+        &vec![0xEE; 20_000],
+        "http://example.invalid/other",
+        "\"v1\"",
+    );
 
-    download_file(&format!("{base}/file"), out.to_str().unwrap(), &resuming(), None).unwrap();
+    download_file(
+        &format!("{base}/file"),
+        out.to_str().unwrap(),
+        &resuming(),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
     assert_eq!(stats.ranged(), 0);
@@ -178,7 +216,13 @@ fn a_remote_file_that_shrank_is_downloaded_again() {
     let out = dir.join("out.bin");
     std::fs::write(&out, vec![0xAB; 50_000]).unwrap();
 
-    download_file(&format!("{base}/file"), out.to_str().unwrap(), &resuming(), None).unwrap();
+    download_file(
+        &format!("{base}/file"),
+        out.to_str().unwrap(),
+        &resuming(),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
     std::fs::remove_dir_all(dir).unwrap();
@@ -192,7 +236,13 @@ fn without_resume_a_stale_part_file_is_discarded() {
     let out = dir.join("out.bin");
     leave_partial(&out, &vec![0xEE; 30_000], &format!("{base}/file"), "\"v1\"");
 
-    download_file(&format!("{base}/file"), out.to_str().unwrap(), &options(), None).unwrap();
+    download_file(
+        &format!("{base}/file"),
+        out.to_str().unwrap(),
+        &options(),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(std::fs::read(&out).unwrap(), data);
     assert_eq!(stats.ranged(), 0);
@@ -209,12 +259,15 @@ fn an_interrupted_download_keeps_its_progress_and_spares_the_existing_file() {
     let mut opts = options();
     opts.timeout = 1;
 
-    let err = download_file(&format!("{base}/stall"), out.to_str().unwrap(), &opts, None).unwrap_err();
+    let err =
+        download_file(&format!("{base}/stall"), out.to_str().unwrap(), &opts, None).unwrap_err();
 
     assert!(matches!(err, Error::Stalled(1)), "got {err:?}");
     assert_eq!(std::fs::read(&out).unwrap(), b"previous version");
     assert_eq!(std::fs::metadata(part_of(&out)).unwrap().len(), 50_000);
-    assert!(std::fs::read_to_string(meta_of(&out)).unwrap().contains("/stall"));
+    assert!(std::fs::read_to_string(meta_of(&out))
+        .unwrap()
+        .contains("/stall"));
     std::fs::remove_dir_all(dir).unwrap();
 }
 

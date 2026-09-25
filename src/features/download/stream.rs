@@ -20,6 +20,7 @@
 use super::error::{Error, Result};
 use super::throttle::Throttle;
 use std::io::{self, Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Size of the single buffer a download reuses for its whole life.
 const BUFFER_SIZE: usize = 64 * 1024;
@@ -28,19 +29,24 @@ const BUFFER_SIZE: usize = 64 * 1024;
 ///
 /// Memory use is one buffer regardless of the file size. `on_chunk` is called with the
 /// size of every chunk after it is written. `stall_secs` is only used to word the error
-/// when the transport reports that a read timed out.
+/// when the transport reports that a read timed out. `cancelled`, when given, is checked
+/// alongside the global Ctrl+C flag between chunks; a segmented download uses it to stop a
+/// segment as soon as a sibling has already failed for good, instead of finishing a
+/// transfer whose result will be discarded anyway.
 ///
 /// # Errors
 ///
 /// A read failure becomes [`Error::Stalled`] (timeout), [`Error::Network`] (any other
 /// transport error) or [`Error::Io`]; a write failure is always [`Error::Io`]. Pressing
-/// Ctrl+C is noticed between chunks and becomes [`Error::Interrupted`], leaving whatever
-/// was already written in place.
+/// Ctrl+C is noticed between chunks and becomes [`Error::Interrupted`]; `cancelled` becoming
+/// set is noticed the same way and becomes [`Error::Cancelled`]. Either way, whatever was
+/// already written is left in place.
 pub(super) fn copy<R, W, F>(
     reader: &mut R,
     writer: &mut W,
     throttle: &mut Throttle,
     stall_secs: u64,
+    cancelled: Option<&AtomicBool>,
     mut on_chunk: F,
 ) -> Result<u64>
 where
@@ -54,6 +60,9 @@ where
     loop {
         if crate::shared::interrupt::requested() {
             return Err(Error::Interrupted);
+        }
+        if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            return Err(Error::Cancelled);
         }
 
         let want = throttle.read_size(buffer.len());
@@ -147,7 +156,7 @@ mod tests {
             let mut out = Vec::new();
             let mut reported = 0u64;
 
-            let total = copy(&mut reader, &mut out, &mut Throttle::new(None), 30, |n| reported += n).unwrap();
+            let total = copy(&mut reader, &mut out, &mut Throttle::new(None), 30, None, |n| reported += n).unwrap();
 
             prop_assert_eq!(&out, &data);
             prop_assert_eq!(total, data.len() as u64);
@@ -173,7 +182,15 @@ mod tests {
         };
         let mut out = Vec::new();
         assert_eq!(
-            copy(&mut reader, &mut out, &mut Throttle::new(None), 30, |_| {}).unwrap(),
+            copy(
+                &mut reader,
+                &mut out,
+                &mut Throttle::new(None),
+                30,
+                None,
+                |_| {}
+            )
+            .unwrap(),
             0
         );
         assert!(out.is_empty());
@@ -186,6 +203,7 @@ mod tests {
             &mut Vec::new(),
             &mut Throttle::new(None),
             30,
+            None,
             |_| {},
         )
         .unwrap_err();
@@ -205,9 +223,53 @@ mod tests {
             &mut FullDisk,
             &mut Throttle::new(None),
             30,
+            None,
             |_| {},
         )
         .unwrap_err();
         assert!(matches!(err, Error::Io(_)));
+    }
+
+    #[test]
+    fn a_set_cancel_flag_stops_the_copy_between_chunks() {
+        let mut reader = ChunkedReader {
+            data: vec![1; 100],
+            position: 0,
+            sizes: vec![10],
+            turn: 0,
+        };
+        let cancelled = AtomicBool::new(true);
+        let err = copy(
+            &mut reader,
+            &mut Vec::new(),
+            &mut Throttle::new(None),
+            30,
+            Some(&cancelled),
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Cancelled));
+    }
+
+    #[test]
+    fn an_unset_cancel_flag_does_not_stop_the_copy() {
+        let mut reader = ChunkedReader {
+            data: vec![1; 100],
+            position: 0,
+            sizes: vec![10],
+            turn: 0,
+        };
+        let cancelled = AtomicBool::new(false);
+        let out = &mut Vec::new();
+        let total = copy(
+            &mut reader,
+            out,
+            &mut Throttle::new(None),
+            30,
+            Some(&cancelled),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(total, 100);
     }
 }
