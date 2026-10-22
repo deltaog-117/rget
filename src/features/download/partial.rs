@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Where a download lives while it is in progress: `name.part` plus a small sidecar,
 //! renamed into place only when the transfer is complete.
 
@@ -64,7 +63,9 @@ impl Target {
         if fs::symlink_metadata(&final_path).is_ok_and(|m| m.file_type().is_symlink()) {
             final_path = fs::canonicalize(&final_path).unwrap_or(final_path);
         }
-        let staged = fs::metadata(&final_path).map(|m| m.is_file()).unwrap_or(true);
+        let staged = fs::metadata(&final_path)
+            .map(|m| m.is_file())
+            .unwrap_or(true);
         Self {
             part_path: with_suffix(&final_path, ".part"),
             meta_path: with_suffix(&final_path, ".part.meta"),
@@ -79,7 +80,11 @@ impl Target {
 
     /// Where bytes are written while the download runs.
     pub(super) fn work_path(&self) -> &Path {
-        if self.staged { &self.part_path } else { &self.final_path }
+        if self.staged {
+            &self.part_path
+        } else {
+            &self.final_path
+        }
     }
 
     pub(super) fn meta_path(&self) -> &Path {
@@ -89,7 +94,12 @@ impl Target {
     /// The bytes a resume can continue from, preferring `name.part`. `name` itself is only
     /// considered when `adopt_final` is set (the user asked for `-c`).
     pub(super) fn resume_source(&self, adopt_final: bool) -> Option<(Source, u64)> {
-        let non_empty_file = |p: &Path| fs::metadata(p).ok().filter(|m| m.is_file() && m.len() > 0).map(|m| m.len());
+        let non_empty_file = |p: &Path| {
+            fs::metadata(p)
+                .ok()
+                .filter(|m| m.is_file() && m.len() > 0)
+                .map(|m| m.len())
+        };
         if let Some(len) = non_empty_file(&self.part_path) {
             return Some((Source::Part, len));
         }
@@ -123,7 +133,11 @@ impl Target {
         let Some(verifier) = verify.filter(|_| self.staged) else {
             return Ok(());
         };
-        let path = if self.part_path.exists() { &self.part_path } else { &self.final_path };
+        let path = if self.part_path.exists() {
+            &self.part_path
+        } else {
+            &self.final_path
+        };
         verifier.check(path).map_err(|reason| {
             // Only ever delete what this download produced, never a pre-existing file.
             if path == &self.part_path {
@@ -211,7 +225,9 @@ fn link_without_replacing(from: &Path, to: &Path) -> io::Result<()> {
     match fs::hard_link(from, to) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(e),
-        Err(_) if fs::symlink_metadata(to).is_ok() => Err(io::Error::from(io::ErrorKind::AlreadyExists)),
+        Err(_) if fs::symlink_metadata(to).is_ok() => {
+            Err(io::Error::from(io::ErrorKind::AlreadyExists))
+        }
         Err(_) => fs::rename(from, to),
     }
 }
@@ -232,7 +248,12 @@ pub(super) struct PartMeta {
 
 impl PartMeta {
     pub(super) fn from_headers(url: &str, headers: &HeaderMap, total: Option<u64>) -> Self {
-        let text = |name| headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
+        let text = |name| {
+            headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+        };
         Self {
             url: url.to_string(),
             etag: text(ETAG),
@@ -281,7 +302,8 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("rget-partial-{}-{}", std::process::id(), name));
+        let dir =
+            std::env::temp_dir().join(format!("rget-partial-{}-{}", std::process::id(), name));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -290,8 +312,14 @@ mod tests {
     #[test]
     fn paths_sit_next_to_the_final_file() {
         let t = Target::resolve("/tmp/rget-nonexistent-dir/file.bin");
-        assert_eq!(t.work_path(), Path::new("/tmp/rget-nonexistent-dir/file.bin.part"));
-        assert_eq!(t.meta_path(), Path::new("/tmp/rget-nonexistent-dir/file.bin.part.meta"));
+        assert_eq!(
+            t.work_path(),
+            Path::new("/tmp/rget-nonexistent-dir/file.bin.part")
+        );
+        assert_eq!(
+            t.meta_path(),
+            Path::new("/tmp/rget-nonexistent-dir/file.bin.part.meta")
+        );
         assert!(t.is_staged());
     }
 
@@ -308,7 +336,10 @@ mod tests {
         fs::write(t.work_path(), b"new").unwrap();
         t.finish(&OnOccupied::Replace).unwrap();
 
-        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
         assert_eq!(fs::read(&real).unwrap(), b"new");
         assert_eq!(fs::read(&link).unwrap(), b"new");
         fs::remove_dir_all(dir).unwrap();
@@ -412,7 +443,13 @@ mod tests {
         full.write(&path).unwrap();
         assert_eq!(PartMeta::read(&path), Some(full));
 
-        let bare = PartMeta { url: "http://h/y".into(), etag: None, last_modified: None, total: None, segments: None };
+        let bare = PartMeta {
+            url: "http://h/y".into(),
+            etag: None,
+            last_modified: None,
+            total: None,
+            segments: None,
+        };
         bare.write(&path).unwrap();
         assert_eq!(PartMeta::read(&path), Some(bare));
         fs::remove_dir_all(dir).unwrap();
@@ -430,10 +467,28 @@ mod tests {
 
     #[test]
     fn a_206_that_omits_validators_inherits_the_earlier_ones() {
-        let earlier = PartMeta { url: "http://h/x".into(), etag: Some("\"e\"".into()), last_modified: None, total: Some(10), segments: None };
-        let new = PartMeta { url: "http://h/x".into(), etag: None, last_modified: None, total: Some(10), segments: None };
-        assert_eq!(new.clone().inherit(Some(&earlier)).etag.as_deref(), Some("\"e\""));
-        let other_url = PartMeta { url: "http://h/other".into(), ..new };
+        let earlier = PartMeta {
+            url: "http://h/x".into(),
+            etag: Some("\"e\"".into()),
+            last_modified: None,
+            total: Some(10),
+            segments: None,
+        };
+        let new = PartMeta {
+            url: "http://h/x".into(),
+            etag: None,
+            last_modified: None,
+            total: Some(10),
+            segments: None,
+        };
+        assert_eq!(
+            new.clone().inherit(Some(&earlier)).etag.as_deref(),
+            Some("\"e\"")
+        );
+        let other_url = PartMeta {
+            url: "http://h/other".into(),
+            ..new
+        };
         assert_eq!(other_url.inherit(Some(&earlier)).etag, None);
     }
 }

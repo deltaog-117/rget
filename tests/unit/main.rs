@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Unit tests for the public API, mirroring `src/`.
 //!
 //! Many of these are characterization tests: they pin what 1.0.0 does today so the

@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Throughput of the streaming download path over loopback, including the staged
 //! `name.part` write and the rename into place.
 //!
@@ -34,8 +33,12 @@ const PAYLOAD_BYTES: usize = 32 * 1024 * 1024;
 
 /// Serves `payload` for every request on a random local port; returns the base URL.
 fn serve(payload: Vec<u8>) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port for the benchmark server");
-    let base = format!("http://{}/file", listener.local_addr().expect("listener has a local address"));
+    let listener =
+        TcpListener::bind("127.0.0.1:0").expect("bind a loopback port for the benchmark server");
+    let base = format!(
+        "http://{}/file",
+        listener.local_addr().expect("listener has a local address")
+    );
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let payload = payload.clone();
@@ -81,7 +84,9 @@ fn bench_download(c: &mut Criterion) {
 
     // A real file, so the `.part` staging and the final rename are part of what is measured.
     let out = std::env::temp_dir().join(format!("rget-bench-{}.bin", std::process::id()));
-    let out = out.to_str().expect("the temp directory path is valid UTF-8");
+    let out = out
+        .to_str()
+        .expect("the temp directory path is valid UTF-8");
 
     let unthrottled = options(None);
     group.bench_function("unthrottled", |b| {

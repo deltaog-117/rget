@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 use rget::features::validation::{validate_url, validate_url_with, Error};
 use rget::shared::address::HostPolicy;
 
@@ -56,7 +55,17 @@ fn the_cloud_metadata_address_and_other_link_local_addresses_are_blocked() {
 
 #[test]
 fn other_non_public_ipv4_ranges_are_blocked() {
-    for ip in ["0.0.0.0", "0.1.2.3", "100.64.0.1", "100.127.255.254", "192.0.0.1", "198.18.0.1", "224.0.0.1", "240.0.0.1", "255.255.255.255"] {
+    for ip in [
+        "0.0.0.0",
+        "0.1.2.3",
+        "100.64.0.1",
+        "100.127.255.254",
+        "192.0.0.1",
+        "198.18.0.1",
+        "224.0.0.1",
+        "240.0.0.1",
+        "255.255.255.255",
+    ] {
         assert_blocked(&format!("http://{ip}/x"));
     }
 }
@@ -72,7 +81,14 @@ fn private_ipv6_ranges_are_blocked() {
 
 #[test]
 fn ipv6_addresses_that_wrap_a_private_ipv4_address_are_blocked() {
-    for host in ["::ffff:127.0.0.1", "::ffff:7f00:1", "::ffff:169.254.169.254", "::ffff:10.0.0.1", "64:ff9b::7f00:1", "2002:7f00:1::"] {
+    for host in [
+        "::ffff:127.0.0.1",
+        "::ffff:7f00:1",
+        "::ffff:169.254.169.254",
+        "::ffff:10.0.0.1",
+        "64:ff9b::7f00:1",
+        "2002:7f00:1::",
+    ] {
         assert_blocked(&format!("http://[{host}]/x"));
     }
 }
@@ -86,7 +102,13 @@ fn numeric_spellings_are_normalised_and_blocked() {
 
 #[test]
 fn localhost_and_everything_under_it_is_blocked() {
-    for host in ["localhost", "LOCALHOST", "localhost.", "foo.localhost", "a.b.localhost."] {
+    for host in [
+        "localhost",
+        "LOCALHOST",
+        "localhost.",
+        "foo.localhost",
+        "a.b.localhost.",
+    ] {
         assert_blocked(&format!("http://{host}/x"));
     }
 }
@@ -113,7 +135,9 @@ fn a_public_looking_name_passes_because_only_downloading_can_tell_where_it_leads
 #[test]
 fn the_error_names_the_offending_host() {
     match validate_url("http://169.254.169.254/x") {
-        Err(Error::BlockedUrl(message)) => assert!(message.contains("169.254.169.254"), "{message}"),
+        Err(Error::BlockedUrl(message)) => {
+            assert!(message.contains("169.254.169.254"), "{message}")
+        }
         other => panic!("{other:?}"),
     }
     match validate_url("http://[::1]/x") {
@@ -135,13 +159,27 @@ fn allowing_private_hosts_lifts_every_host_block() {
         "http://foo.localhost/x",
         "http://0.0.0.0/x",
     ] {
-        assert!(validate_url_with(url, HostPolicy::AllowPrivate).is_ok(), "{url}");
+        assert!(
+            validate_url_with(url, HostPolicy::AllowPrivate).is_ok(),
+            "{url}"
+        );
     }
 }
 
 #[test]
 fn allowing_private_hosts_does_not_relax_the_other_checks() {
-    for url in ["ftp://127.0.0.1/x", "http://127.0.0.1/../etc", "http://127.0.0.1/.env", "http://exa;mple.com/x"] {
-        assert!(matches!(validate_url_with(url, HostPolicy::AllowPrivate), Err(Error::InvalidUrl(_))), "{url}");
+    for url in [
+        "ftp://127.0.0.1/x",
+        "http://127.0.0.1/../etc",
+        "http://127.0.0.1/.env",
+        "http://exa;mple.com/x",
+    ] {
+        assert!(
+            matches!(
+                validate_url_with(url, HostPolicy::AllowPrivate),
+                Err(Error::InvalidUrl(_))
+            ),
+            "{url}"
+        );
     }
 }

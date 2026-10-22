@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Everything a download needs besides the URL and the destination.
 
 use crate::shared::address::HostPolicy;

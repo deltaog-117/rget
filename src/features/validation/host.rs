@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Host-level SSRF guard: refuse loopback, private and other non-public destinations.
 //!
 //! Only what the URL itself says can be judged here: an IP literal, or a name that always

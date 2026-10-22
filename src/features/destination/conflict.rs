@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! What to do when the file we are about to write already exists.
 
 use super::filename::split_extension;
@@ -104,8 +103,14 @@ impl Claims {
         let claimed = self.claimed.contains(path);
         let exists = occupied(path);
         match policy {
-            ExistingFile::Skip if claimed => Placement::Skip { path: path.to_string(), reason: SkipReason::EarlierUrl },
-            ExistingFile::Skip if exists => Placement::Skip { path: path.to_string(), reason: SkipReason::Exists },
+            ExistingFile::Skip if claimed => Placement::Skip {
+                path: path.to_string(),
+                reason: SkipReason::EarlierUrl,
+            },
+            ExistingFile::Skip if exists => Placement::Skip {
+                path: path.to_string(),
+                reason: SkipReason::Exists,
+            },
             ExistingFile::Rename if claimed || exists => self.next_free(path),
             ExistingFile::Overwrite if claimed => self.next_free(path),
             _ => {
@@ -133,7 +138,11 @@ impl Claims {
     }
 
     fn next_free(&mut self, path: &str) -> Placement {
-        let base = self.origin.get(path).cloned().unwrap_or_else(|| path.to_string());
+        let base = self
+            .origin
+            .get(path)
+            .cloned()
+            .unwrap_or_else(|| path.to_string());
         for n in 1..=MAX_NUMBER {
             let candidate = numbered_name(&base, n);
             if !self.taken(&candidate) {
@@ -142,7 +151,10 @@ impl Claims {
                 return Placement::Write(candidate);
             }
         }
-        Placement::Skip { path: path.to_string(), reason: SkipReason::NoFreeName }
+        Placement::Skip {
+            path: path.to_string(),
+            reason: SkipReason::NoFreeName,
+        }
     }
 }
 

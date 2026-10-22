@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Download: fetching bytes from a URL to a file.
 //!
 //! Entry points are [`download_file`] (one URL, single- or multi-connection) and
@@ -25,8 +24,8 @@ mod client;
 mod error;
 mod options;
 mod outcome;
-mod parts;
 mod partial;
+mod parts;
 mod pool;
 mod resume;
 mod retry;

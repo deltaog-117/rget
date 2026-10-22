@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Generic, feature-agnostic building blocks.
 //!
 //! Nothing in here may import from `features/` or `app/`; dependencies point inward.

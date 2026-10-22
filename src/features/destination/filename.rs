@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Choosing a file name.
 //!
 //! A name taken from a URL is untrusted text: once percent-decoded it can contain `/`, control
@@ -41,7 +40,10 @@ pub fn file_name_for(url: &Url, explicit: Option<&str>) -> String {
     if let Some(name) = explicit {
         return name.to_string();
     }
-    let segment = url.path_segments().and_then(|mut s| s.next_back()).unwrap_or("");
+    let segment = url
+        .path_segments()
+        .and_then(|mut s| s.next_back())
+        .unwrap_or("");
     safe_name(&decode(segment))
 }
 
@@ -61,7 +63,13 @@ fn is_bidi_control(c: char) -> bool {
 fn safe_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
-        .map(|c| if c == '/' || c == '\\' || c.is_control() || is_bidi_control(c) { '_' } else { c })
+        .map(|c| {
+            if c == '/' || c == '\\' || c.is_control() || is_bidi_control(c) {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     let trimmed = cleaned.trim();
     if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
@@ -112,7 +120,11 @@ fn shorten(name: &str, max: usize) -> String {
         return name.to_string();
     }
     match extension_start(name) {
-        Some(dot) => format!("{}{}", cut(&name[..dot], max - (name.len() - dot)), &name[dot..]),
+        Some(dot) => format!(
+            "{}{}",
+            cut(&name[..dot], max - (name.len() - dot)),
+            &name[dot..]
+        ),
         None => cut(name, max).to_string(),
     }
 }
@@ -145,7 +157,16 @@ mod tests {
 
     #[test]
     fn legal_but_unusual_characters_are_kept() {
-        for name in ["file(1).zip", "a;b.txt", "a$b.txt", "a b.txt", "café.txt", ".env.example", "a&b|c.txt", "日本語.pdf"] {
+        for name in [
+            "file(1).zip",
+            "a;b.txt",
+            "a$b.txt",
+            "a b.txt",
+            "café.txt",
+            ".env.example",
+            "a&b|c.txt",
+            "日本語.pdf",
+        ] {
             assert_eq!(safe_name(name), name);
         }
     }
@@ -162,10 +183,16 @@ mod tests {
     fn a_compound_extension_is_kept_whole_but_a_long_one_is_not() {
         let name = |ext: &str| safe_name(&format!("{}{}", "x".repeat(300), ext));
         for ext in [".tar.gz", ".tar.xz", ".tar.bz2", ".zip", ".iso"] {
-            assert!(name(ext).ends_with(ext) && name(ext).len() == MAX_NAME_BYTES, "{ext}");
+            assert!(
+                name(ext).ends_with(ext) && name(ext).len() == MAX_NAME_BYTES,
+                "{ext}"
+            );
         }
         // Not an extension worth keeping: a dot followed by a long tail.
-        assert_eq!(name(".averylongsuffixthatisnotanextension").len(), MAX_NAME_BYTES);
+        assert_eq!(
+            name(".averylongsuffixthatisnotanextension").len(),
+            MAX_NAME_BYTES
+        );
     }
 
     #[test]

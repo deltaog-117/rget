@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 use proptest::prelude::*;
 use rget::features::validation::{validate_url, Error};
 
@@ -54,7 +53,9 @@ fn only_http_and_https_are_allowed() {
 
 #[test]
 fn characters_that_are_legal_in_a_path_or_query_are_accepted() {
-    for c in [';', '|', '&', '$', '(', ')', '\'', '!', '*', ',', '=', ':', '@', '+'] {
+    for c in [
+        ';', '|', '&', '$', '(', ')', '\'', '!', '*', ',', '=', ':', '@', '+',
+    ] {
         assert_ok(&format!("http://example.com/a{c}b"));
         assert_ok(&format!("http://example.com/?q=a{c}b"));
     }
@@ -135,7 +136,10 @@ fn hostnames_no_hostname_can_contain_are_rejected() {
             other => panic!("host with {c:?} should be rejected, got {other:?}"),
         }
     }
-    assert_invalid("http://exa;mple.com/x", "hostname contains invalid character ';'");
+    assert_invalid(
+        "http://exa;mple.com/x",
+        "hostname contains invalid character ';'",
+    );
 }
 
 #[test]

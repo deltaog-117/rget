@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Resume decisions, kept free of I/O so the whole state machine can be tested.
 //!
 //! Before the request, [`plan`] decides what to ask for. After the response, [`interpret`]
@@ -56,9 +55,15 @@ pub(super) fn plan(partial_len: u64, meta: Option<&PartMeta>, url: &str) -> Plan
         Some(m) if m.url != url || m.segments.is_some() => Plan::Fresh,
         // More bytes than the file has: it shrank or the partial is corrupt.
         Some(m) if m.total.is_some_and(|total| partial_len > total) => Plan::Fresh,
-        Some(m) => Plan::Continue { from: partial_len, if_range: m.validator().map(str::to_string) },
+        Some(m) => Plan::Continue {
+            from: partial_len,
+            if_range: m.validator().map(str::to_string),
+        },
         // No sidecar (data from 1.0.0 or another tool): resume unvalidated, like wget and curl.
-        None => Plan::Continue { from: partial_len, if_range: None },
+        None => Plan::Continue {
+            from: partial_len,
+            if_range: None,
+        },
     }
 }
 
@@ -103,7 +108,11 @@ pub(super) enum Reply {
 pub(super) fn interpret(plan: &Plan, status: StatusCode, content_range: Option<&str>) -> Reply {
     let (from, if_range) = match plan {
         Plan::Fresh => {
-            return if status.is_success() { Reply::Full } else { Reply::Other };
+            return if status.is_success() {
+                Reply::Full
+            } else {
+                Reply::Other
+            };
         }
         Plan::Continue { from, if_range } => (*from, if_range),
     };
@@ -111,16 +120,20 @@ pub(super) fn interpret(plan: &Plan, status: StatusCode, content_range: Option<&
 
     match status.as_u16() {
         206 => match content_range {
-            Some(ContentRange { range: Some((start, _)), total }) if start == from => {
-                Reply::Append { total }
-            }
+            Some(ContentRange {
+                range: Some((start, _)),
+                total,
+            }) if start == from => Reply::Append { total },
             _ => Reply::WrongOffset,
         },
-        200 => Reply::Restart { validator_failed: if_range.is_some() },
+        200 => Reply::Restart {
+            validator_failed: if_range.is_some(),
+        },
         416 => match content_range {
-            Some(ContentRange { range: None, total: Some(total) }) if total == from => {
-                Reply::AlreadyComplete
-            }
+            Some(ContentRange {
+                range: None,
+                total: Some(total),
+            }) if total == from => Reply::AlreadyComplete,
             _ => Reply::Refetch,
         },
         _ => Reply::Other,
@@ -132,7 +145,12 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    fn meta(url: &str, etag: Option<&str>, last_modified: Option<&str>, total: Option<u64>) -> PartMeta {
+    fn meta(
+        url: &str,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+        total: Option<u64>,
+    ) -> PartMeta {
         PartMeta {
             url: url.to_string(),
             etag: etag.map(str::to_string),
@@ -153,29 +171,63 @@ mod tests {
     #[test]
     fn no_partial_data_means_a_fresh_download() {
         assert_eq!(plan(0, None, URL), Plan::Fresh);
-        assert_eq!(plan(0, Some(&meta(URL, Some("\"a\""), None, Some(10))), URL), Plan::Fresh);
+        assert_eq!(
+            plan(0, Some(&meta(URL, Some("\"a\""), None, Some(10))), URL),
+            Plan::Fresh
+        );
     }
 
     #[test]
     fn partial_data_without_a_sidecar_resumes_unvalidated() {
-        assert_eq!(plan(500, None, URL), Plan::Continue { from: 500, if_range: None });
+        assert_eq!(
+            plan(500, None, URL),
+            Plan::Continue {
+                from: 500,
+                if_range: None
+            }
+        );
     }
 
     #[test]
     fn a_strong_etag_is_the_validator() {
-        let m = meta(URL, Some("\"abc\""), Some("Wed, 01 Jan 2025 00:00:00 GMT"), Some(1000));
-        assert_eq!(plan(500, Some(&m), URL), Plan::Continue { from: 500, if_range: Some("\"abc\"".into()) });
+        let m = meta(
+            URL,
+            Some("\"abc\""),
+            Some("Wed, 01 Jan 2025 00:00:00 GMT"),
+            Some(1000),
+        );
+        assert_eq!(
+            plan(500, Some(&m), URL),
+            Plan::Continue {
+                from: 500,
+                if_range: Some("\"abc\"".into())
+            }
+        );
     }
 
     #[test]
     fn a_weak_etag_is_skipped_in_favour_of_last_modified() {
-        let m = meta(URL, Some("W/\"abc\""), Some("Wed, 01 Jan 2025 00:00:00 GMT"), None);
+        let m = meta(
+            URL,
+            Some("W/\"abc\""),
+            Some("Wed, 01 Jan 2025 00:00:00 GMT"),
+            None,
+        );
         assert_eq!(
             plan(500, Some(&m), URL),
-            Plan::Continue { from: 500, if_range: Some("Wed, 01 Jan 2025 00:00:00 GMT".into()) }
+            Plan::Continue {
+                from: 500,
+                if_range: Some("Wed, 01 Jan 2025 00:00:00 GMT".into())
+            }
         );
         let weak_only = meta(URL, Some("W/\"abc\""), None, None);
-        assert_eq!(plan(500, Some(&weak_only), URL), Plan::Continue { from: 500, if_range: None });
+        assert_eq!(
+            plan(500, Some(&weak_only), URL),
+            Plan::Continue {
+                from: 500,
+                if_range: None
+            }
+        );
     }
 
     #[test]
@@ -196,21 +248,50 @@ mod tests {
         let m = meta(URL, Some("\"a\""), None, Some(400));
         assert_eq!(plan(500, Some(&m), URL), Plan::Fresh);
         let exact = meta(URL, Some("\"a\""), None, Some(500));
-        assert!(matches!(plan(500, Some(&exact), URL), Plan::Continue { .. }));
+        assert!(matches!(
+            plan(500, Some(&exact), URL),
+            Plan::Continue { .. }
+        ));
     }
 
     // ---- content-range ----------------------------------------------------------
 
     #[test]
     fn content_range_forms_are_parsed() {
-        assert_eq!(parse_content_range("bytes 0-99/1000"), Some(ContentRange { range: Some((0, 99)), total: Some(1000) }));
-        assert_eq!(parse_content_range("bytes */1000"), Some(ContentRange { range: None, total: Some(1000) }));
-        assert_eq!(parse_content_range("bytes 5-9/*"), Some(ContentRange { range: Some((5, 9)), total: None }));
+        assert_eq!(
+            parse_content_range("bytes 0-99/1000"),
+            Some(ContentRange {
+                range: Some((0, 99)),
+                total: Some(1000)
+            })
+        );
+        assert_eq!(
+            parse_content_range("bytes */1000"),
+            Some(ContentRange {
+                range: None,
+                total: Some(1000)
+            })
+        );
+        assert_eq!(
+            parse_content_range("bytes 5-9/*"),
+            Some(ContentRange {
+                range: Some((5, 9)),
+                total: None
+            })
+        );
     }
 
     #[test]
     fn malformed_content_range_is_rejected() {
-        for bad in ["", "bytes", "0-99/1000", "bytes 0-99", "bytes a-b/c", "items 0-9/10", "bytes 0/10"] {
+        for bad in [
+            "",
+            "bytes",
+            "0-99/1000",
+            "bytes 0-99",
+            "bytes a-b/c",
+            "items 0-9/10",
+            "bytes 0/10",
+        ] {
             assert_eq!(parse_content_range(bad), None, "{bad:?}");
         }
     }
@@ -218,50 +299,91 @@ mod tests {
     // ---- interpret --------------------------------------------------------------
 
     fn cont(from: u64, validated: bool) -> Plan {
-        Plan::Continue { from, if_range: validated.then(|| "\"v\"".to_string()) }
+        Plan::Continue {
+            from,
+            if_range: validated.then(|| "\"v\"".to_string()),
+        }
     }
 
     #[test]
     fn a_fresh_request_only_cares_about_success() {
         assert_eq!(interpret(&Plan::Fresh, sc(200), None), Reply::Full);
         assert_eq!(interpret(&Plan::Fresh, sc(404), None), Reply::Other);
-        assert_eq!(interpret(&Plan::Fresh, sc(416), Some("bytes */5")), Reply::Other);
+        assert_eq!(
+            interpret(&Plan::Fresh, sc(416), Some("bytes */5")),
+            Reply::Other
+        );
     }
 
     #[test]
     fn a_206_at_the_requested_offset_appends() {
-        assert_eq!(interpret(&cont(100, true), sc(206), Some("bytes 100-999/1000")), Reply::Append { total: Some(1000) });
-        assert_eq!(interpret(&cont(100, false), sc(206), Some("bytes 100-999/*")), Reply::Append { total: None });
+        assert_eq!(
+            interpret(&cont(100, true), sc(206), Some("bytes 100-999/1000")),
+            Reply::Append { total: Some(1000) }
+        );
+        assert_eq!(
+            interpret(&cont(100, false), sc(206), Some("bytes 100-999/*")),
+            Reply::Append { total: None }
+        );
     }
 
     #[test]
     fn a_206_at_the_wrong_offset_or_without_a_range_is_rejected() {
-        assert_eq!(interpret(&cont(100, false), sc(206), Some("bytes 0-999/1000")), Reply::WrongOffset);
-        assert_eq!(interpret(&cont(100, false), sc(206), None), Reply::WrongOffset);
+        assert_eq!(
+            interpret(&cont(100, false), sc(206), Some("bytes 0-999/1000")),
+            Reply::WrongOffset
+        );
+        assert_eq!(
+            interpret(&cont(100, false), sc(206), None),
+            Reply::WrongOffset
+        );
     }
 
     #[test]
     fn a_200_to_a_range_request_restarts_and_says_why() {
-        assert_eq!(interpret(&cont(100, true), sc(200), None), Reply::Restart { validator_failed: true });
-        assert_eq!(interpret(&cont(100, false), sc(200), None), Reply::Restart { validator_failed: false });
+        assert_eq!(
+            interpret(&cont(100, true), sc(200), None),
+            Reply::Restart {
+                validator_failed: true
+            }
+        );
+        assert_eq!(
+            interpret(&cont(100, false), sc(200), None),
+            Reply::Restart {
+                validator_failed: false
+            }
+        );
     }
 
     #[test]
     fn a_416_matching_our_length_means_the_file_is_complete() {
-        assert_eq!(interpret(&cont(1000, false), sc(416), Some("bytes */1000")), Reply::AlreadyComplete);
+        assert_eq!(
+            interpret(&cont(1000, false), sc(416), Some("bytes */1000")),
+            Reply::AlreadyComplete
+        );
     }
 
     #[test]
     fn any_other_416_means_the_partial_is_stale() {
-        assert_eq!(interpret(&cont(1000, false), sc(416), Some("bytes */400")), Reply::Refetch);
-        assert_eq!(interpret(&cont(1000, false), sc(416), Some("bytes */2000")), Reply::Refetch);
+        assert_eq!(
+            interpret(&cont(1000, false), sc(416), Some("bytes */400")),
+            Reply::Refetch
+        );
+        assert_eq!(
+            interpret(&cont(1000, false), sc(416), Some("bytes */2000")),
+            Reply::Refetch
+        );
         assert_eq!(interpret(&cont(1000, false), sc(416), None), Reply::Refetch);
     }
 
     #[test]
     fn other_statuses_are_left_to_the_caller() {
         for code in [301, 403, 404, 500, 503] {
-            assert_eq!(interpret(&cont(10, false), sc(code), None), Reply::Other, "{code}");
+            assert_eq!(
+                interpret(&cont(10, false), sc(code), None),
+                Reply::Other,
+                "{code}"
+            );
         }
     }
 

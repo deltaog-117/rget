@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 use proptest::prelude::*;
 use rget::features::integrity::{Error, Sha256Digest};
 
@@ -25,7 +24,8 @@ const HELLO: &str = "6e39426dd10db18f88f5c6b6be808b8d9f12929cd03b6ac41dba112de33
 fn sixty_four_hex_digits_parse_in_either_case() {
     let lower = Sha256Digest::parse(HELLO).unwrap();
     let upper = Sha256Digest::parse(&HELLO.to_uppercase()).unwrap();
-    let mixed = Sha256Digest::parse(&format!("{}{}", HELLO[..32].to_uppercase(), &HELLO[32..])).unwrap();
+    let mixed =
+        Sha256Digest::parse(&format!("{}{}", HELLO[..32].to_uppercase(), &HELLO[32..])).unwrap();
     assert_eq!(lower, upper);
     assert_eq!(lower, mixed);
     assert_eq!(lower.to_hex(), HELLO);
@@ -34,14 +34,33 @@ fn sixty_four_hex_digits_parse_in_either_case() {
 
 #[test]
 fn only_the_first_word_is_read_so_sha256sum_output_can_be_pasted() {
-    for line in [format!("{HELLO}  file.zip"), format!("  {HELLO}\n"), format!("{HELLO} *file.zip\n"), format!("{HELLO}\tname with spaces.bin")] {
-        assert_eq!(Sha256Digest::parse(&line).unwrap().to_hex(), HELLO, "{line:?}");
+    for line in [
+        format!("{HELLO}  file.zip"),
+        format!("  {HELLO}\n"),
+        format!("{HELLO} *file.zip\n"),
+        format!("{HELLO}\tname with spaces.bin"),
+    ] {
+        assert_eq!(
+            Sha256Digest::parse(&line).unwrap().to_hex(),
+            HELLO,
+            "{line:?}"
+        );
     }
 }
 
 #[test]
 fn anything_else_is_refused_with_the_offending_text() {
-    for bad in ["", "   ", "deadbeef", "0x6e39", &HELLO[..63], &format!("{HELLO}0"), &HELLO.replace('6', "g"), &"é".repeat(32), &format!("z{}", &HELLO[1..])] {
+    for bad in [
+        "",
+        "   ",
+        "deadbeef",
+        "0x6e39",
+        &HELLO[..63],
+        &format!("{HELLO}0"),
+        &HELLO.replace('6', "g"),
+        &"é".repeat(32),
+        &format!("z{}", &HELLO[1..]),
+    ] {
         match Sha256Digest::parse(bad) {
             Err(Error::InvalidDigest(text)) => assert!(text.len() <= 80 * 4, "{text:?}"),
             other => panic!("{bad:?} should be refused, got {other:?}"),

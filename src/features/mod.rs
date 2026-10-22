@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! One folder per user-facing capability.
 //!
 //! Features never import each other; `app` is the only place that wires them together.

@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Content checks on a URL that has already parsed.
 //!
 //! What matters is what a URL *means* once parsed, not which characters appear in its text:
@@ -64,7 +63,10 @@ fn check_host_characters(url: &Url) -> Result<()> {
             .chars()
             .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')));
         if let Some(c) = invalid {
-            return Err(blocked(format!("hostname contains invalid character '{}'", c)));
+            return Err(blocked(format!(
+                "hostname contains invalid character '{}'",
+                c
+            )));
         }
     }
     Ok(())
@@ -77,7 +79,10 @@ fn decode(text: &str) -> String {
 /// The path of `raw` exactly as written: what follows the authority, up to `?` or `#`.
 /// Tabs and newlines are dropped first, as the parser drops them.
 fn raw_path(raw: &str) -> String {
-    let cleaned: String = raw.chars().filter(|c| !matches!(c, '\t' | '\n' | '\r')).collect();
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect();
     let after_scheme = cleaned.trim().split_once(':').map_or("", |(_, rest)| rest);
     // A query or fragment ends the authority and the path alike, so cut there first: text
     // after a `?` must never be mistaken for a path.
@@ -95,8 +100,11 @@ fn raw_path(raw: &str) -> String {
 /// Whether any path segment is `..` once percent-decoded (`%2e%2e`, `.%2E`, `..%2f`) and
 /// split on `/` and `\`. Only the path counts; `a..b` and `?next=../x` are ordinary.
 fn has_dot_dot_segment(path: &str) -> bool {
-    path.split(['/', '\\'])
-        .any(|segment| decode(segment).split(['/', '\\']).any(|piece| piece == ".."))
+    path.split(['/', '\\']).any(|segment| {
+        decode(segment)
+            .split(['/', '\\'])
+            .any(|piece| piece == "..")
+    })
 }
 
 fn check_traversal(raw: &str) -> Result<()> {
@@ -122,7 +130,10 @@ fn path_pieces(url: &Url) -> Vec<String> {
 /// The sensitive file the path names, if any.
 fn sensitive_file(url: &Url) -> Option<String> {
     let pieces = path_pieces(url);
-    if let Some(name) = pieces.iter().find(|p| SENSITIVE_NAMES.contains(&p.as_str())) {
+    if let Some(name) = pieces
+        .iter()
+        .find(|p| SENSITIVE_NAMES.contains(&p.as_str()))
+    {
         return Some(name.clone());
     }
     pieces.windows(2).find_map(|pair| {
@@ -155,7 +166,10 @@ mod tests {
         assert_eq!(raw_path("http://example.com?x=/../"), "");
         assert_eq!(raw_path("http://example.com#/../"), "");
         assert_eq!(raw_path("http://example.com/a?x=/../#/../"), "/a");
-        assert_eq!(raw_path("https://user:pw@example.com:8080/a/../b"), "/a/../b");
+        assert_eq!(
+            raw_path("https://user:pw@example.com:8080/a/../b"),
+            "/a/../b"
+        );
         assert_eq!(raw_path("  http://example.com/a  "), "/a");
     }
 
@@ -168,22 +182,55 @@ mod tests {
 
     #[test]
     fn dot_dot_segments_are_found_in_every_encoding() {
-        for path in ["/../x", "/a/../b", "/a/..", "/a/%2e%2e/b", "/a/%2E%2E/b", "/a/.%2e/b", "/a/%2e./b", "/a\\..\\b", "/a/..%2fb", "/a/..%5cb"] {
+        for path in [
+            "/../x",
+            "/a/../b",
+            "/a/..",
+            "/a/%2e%2e/b",
+            "/a/%2E%2E/b",
+            "/a/.%2e/b",
+            "/a/%2e./b",
+            "/a\\..\\b",
+            "/a/..%2fb",
+            "/a/..%5cb",
+        ] {
             assert!(has_dot_dot_segment(path), "{path}");
         }
     }
 
     #[test]
     fn dots_inside_a_name_are_not_traversal() {
-        for path in ["/a..b", "/..a", "/a../b", "/...", "/a/./b", "/file..txt", "/v1.2..3/x", "/.", "/%2e", "/.hidden"] {
+        for path in [
+            "/a..b",
+            "/..a",
+            "/a../b",
+            "/...",
+            "/a/./b",
+            "/file..txt",
+            "/v1.2..3/x",
+            "/.",
+            "/%2e",
+            "/.hidden",
+        ] {
             assert!(!has_dot_dot_segment(path), "{path}");
         }
     }
 
     #[test]
     fn hostnames_allow_letters_digits_dots_hyphens_and_underscores() {
-        for host in ["example.com", "a-b.example.co.uk", "ex_ample.com", "xn--mnchen-3ya.de", "localhost", "1.2.3.4", "[::1]"] {
-            assert!(check_host_characters(&parse(&format!("http://{host}/"))).is_ok(), "{host}");
+        for host in [
+            "example.com",
+            "a-b.example.co.uk",
+            "ex_ample.com",
+            "xn--mnchen-3ya.de",
+            "localhost",
+            "1.2.3.4",
+            "[::1]",
+        ] {
+            assert!(
+                check_host_characters(&parse(&format!("http://{host}/"))).is_ok(),
+                "{host}"
+            );
         }
     }
 
@@ -193,7 +240,10 @@ mod tests {
             let url = Url::parse(&format!("http://exa{c}mple.com/x"));
             if let Ok(url) = url {
                 let err = check_host_characters(&url).unwrap_err();
-                assert!(matches!(&err, Error::InvalidUrl(m) if m.contains(&format!("'{c}'"))), "{c}: {err:?}");
+                assert!(
+                    matches!(&err, Error::InvalidUrl(m) if m.contains(&format!("'{c}'"))),
+                    "{c}: {err:?}"
+                );
             }
         }
         assert!(check_host_characters(&parse("http://exa;mple.com/")).is_err());
@@ -202,22 +252,61 @@ mod tests {
     #[test]
     fn sensitive_names_match_whole_decoded_segments_only() {
         assert_eq!(sensitive_file(&parse("http://h/.env")), Some(".env".into()));
-        assert_eq!(sensitive_file(&parse("http://h/a/.ENV")), Some(".env".into()));
-        assert_eq!(sensitive_file(&parse("http://h/%2eenv")), Some(".env".into()));
-        assert_eq!(sensitive_file(&parse("http://h/home/.bashrc")), Some(".bashrc".into()));
-        for ok in ["http://h/.env.example", "http://h/environment", "http://h/my.env", "http://h/.envrc", "http://h/bashrc", "http://h/a?f=.env", "http://h/a#.env"] {
+        assert_eq!(
+            sensitive_file(&parse("http://h/a/.ENV")),
+            Some(".env".into())
+        );
+        assert_eq!(
+            sensitive_file(&parse("http://h/%2eenv")),
+            Some(".env".into())
+        );
+        assert_eq!(
+            sensitive_file(&parse("http://h/home/.bashrc")),
+            Some(".bashrc".into())
+        );
+        for ok in [
+            "http://h/.env.example",
+            "http://h/environment",
+            "http://h/my.env",
+            "http://h/.envrc",
+            "http://h/bashrc",
+            "http://h/a?f=.env",
+            "http://h/a#.env",
+        ] {
             assert_eq!(sensitive_file(&parse(ok)), None, "{ok}");
         }
     }
 
     #[test]
     fn sensitive_pairs_need_both_segments_in_order() {
-        assert_eq!(sensitive_file(&parse("http://h/etc/passwd")), Some("etc/passwd".into()));
-        assert_eq!(sensitive_file(&parse("http://h/x/etc/shadow")), Some("etc/shadow".into()));
-        assert_eq!(sensitive_file(&parse("http://h/repo/.git/config")), Some(".git/config".into()));
-        assert_eq!(sensitive_file(&parse("http://h/.ssh/id_rsa")), Some(".ssh/id_rsa".into()));
-        assert_eq!(sensitive_file(&parse("http://h/etc%2fpasswd")), Some("etc/passwd".into()));
-        for ok in ["http://h/passwd/etc", "http://h/etc/passwd.bak", "http://h/etc/x/passwd", "http://h/.git/configuration", "http://h/etc", "http://h/passwd"] {
+        assert_eq!(
+            sensitive_file(&parse("http://h/etc/passwd")),
+            Some("etc/passwd".into())
+        );
+        assert_eq!(
+            sensitive_file(&parse("http://h/x/etc/shadow")),
+            Some("etc/shadow".into())
+        );
+        assert_eq!(
+            sensitive_file(&parse("http://h/repo/.git/config")),
+            Some(".git/config".into())
+        );
+        assert_eq!(
+            sensitive_file(&parse("http://h/.ssh/id_rsa")),
+            Some(".ssh/id_rsa".into())
+        );
+        assert_eq!(
+            sensitive_file(&parse("http://h/etc%2fpasswd")),
+            Some("etc/passwd".into())
+        );
+        for ok in [
+            "http://h/passwd/etc",
+            "http://h/etc/passwd.bak",
+            "http://h/etc/x/passwd",
+            "http://h/.git/configuration",
+            "http://h/etc",
+            "http://h/passwd",
+        ] {
             assert_eq!(sensitive_file(&parse(ok)), None, "{ok}");
         }
     }

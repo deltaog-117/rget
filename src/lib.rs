@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! rget: a safe, modern downloader for Linux.
 //!
 //! The binary in `main.rs` is a thin shell around [`app::run`]. The logic lives here so

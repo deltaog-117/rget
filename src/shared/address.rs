@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Which network addresses an untrusted URL may point at.
 //!
 //! A downloader that follows links can be turned against the machine it runs on: a URL,
@@ -112,7 +111,12 @@ fn embedded_v4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
         return Some(low);
     }
     if s[0] == 0x2002 {
-        return Some(Ipv4Addr::new((s[1] >> 8) as u8, s[1] as u8, (s[2] >> 8) as u8, s[2] as u8));
+        return Some(Ipv4Addr::new(
+            (s[1] >> 8) as u8,
+            s[1] as u8,
+            (s[2] >> 8) as u8,
+            s[2] as u8,
+        ));
     }
     None
 }
@@ -131,10 +135,25 @@ mod tests {
 
     #[test]
     fn ordinary_addresses_are_public() {
-        for ip in ["8.8.8.8", "1.1.1.1", "93.184.216.34", "172.32.0.1", "172.15.255.255", "100.63.255.255", "100.128.0.1", "198.17.0.1", "198.20.0.1", "223.255.255.255"] {
+        for ip in [
+            "8.8.8.8",
+            "1.1.1.1",
+            "93.184.216.34",
+            "172.32.0.1",
+            "172.15.255.255",
+            "100.63.255.255",
+            "100.128.0.1",
+            "198.17.0.1",
+            "198.20.0.1",
+            "223.255.255.255",
+        ] {
             assert!(is_public(v4(ip)), "{ip}");
         }
-        for ip in ["2001:4860:4860::8888", "2606:4700:4700::1111", "2a00:1450:4001:81b::200e"] {
+        for ip in [
+            "2001:4860:4860::8888",
+            "2606:4700:4700::1111",
+            "2a00:1450:4001:81b::200e",
+        ] {
             assert!(is_public(v6(ip)), "{ip}");
         }
     }
@@ -142,11 +161,31 @@ mod tests {
     #[test]
     fn every_non_public_ipv4_range_is_refused() {
         for ip in [
-            "0.0.0.0", "0.255.255.255", "10.0.0.1", "10.255.255.255", "100.64.0.1", "100.127.255.255",
-            "127.0.0.1", "127.0.0.2", "127.255.255.255", "169.254.0.1", "169.254.169.254",
-            "172.16.0.1", "172.31.255.255", "192.0.0.1", "192.0.2.1", "192.168.0.1", "192.168.255.255",
-            "198.18.0.1", "198.19.255.255", "198.51.100.1", "203.0.113.1", "224.0.0.1", "239.255.255.255",
-            "240.0.0.1", "255.255.255.255",
+            "0.0.0.0",
+            "0.255.255.255",
+            "10.0.0.1",
+            "10.255.255.255",
+            "100.64.0.1",
+            "100.127.255.255",
+            "127.0.0.1",
+            "127.0.0.2",
+            "127.255.255.255",
+            "169.254.0.1",
+            "169.254.169.254",
+            "172.16.0.1",
+            "172.31.255.255",
+            "192.0.0.1",
+            "192.0.2.1",
+            "192.168.0.1",
+            "192.168.255.255",
+            "198.18.0.1",
+            "198.19.255.255",
+            "198.51.100.1",
+            "203.0.113.1",
+            "224.0.0.1",
+            "239.255.255.255",
+            "240.0.0.1",
+            "255.255.255.255",
         ] {
             assert!(!is_public(v4(ip)), "{ip} must be refused");
         }
@@ -154,14 +193,34 @@ mod tests {
 
     #[test]
     fn every_non_public_ipv6_range_is_refused() {
-        for ip in ["::", "::1", "fc00::1", "fd00::1", "fe80::1", "febf::1", "fec0::1", "ff02::1", "2001:db8::1"] {
+        for ip in [
+            "::",
+            "::1",
+            "fc00::1",
+            "fd00::1",
+            "fe80::1",
+            "febf::1",
+            "fec0::1",
+            "ff02::1",
+            "2001:db8::1",
+        ] {
             assert!(!is_public(v6(ip)), "{ip} must be refused");
         }
     }
 
     #[test]
     fn ipv6_addresses_carrying_an_ipv4_address_are_judged_by_it() {
-        for ip in ["::ffff:127.0.0.1", "::ffff:7f00:1", "::ffff:169.254.169.254", "::ffff:10.0.0.1", "::127.0.0.2", "64:ff9b::7f00:1", "64:ff9b::a00:1", "2002:7f00:1::", "2002:a9fe:a9fe::"] {
+        for ip in [
+            "::ffff:127.0.0.1",
+            "::ffff:7f00:1",
+            "::ffff:169.254.169.254",
+            "::ffff:10.0.0.1",
+            "::127.0.0.2",
+            "64:ff9b::7f00:1",
+            "64:ff9b::a00:1",
+            "2002:7f00:1::",
+            "2002:a9fe:a9fe::",
+        ] {
             assert!(!is_public(v6(ip)), "{ip} must be refused");
         }
         for ip in ["::ffff:8.8.8.8", "64:ff9b::808:808", "2002:808:808::"] {
@@ -171,10 +230,24 @@ mod tests {
 
     #[test]
     fn local_names_are_recognised_whatever_their_spelling() {
-        for name in ["localhost", "LOCALHOST", "localhost.", "foo.localhost", "a.b.Localhost.", "x.localhost"] {
+        for name in [
+            "localhost",
+            "LOCALHOST",
+            "localhost.",
+            "foo.localhost",
+            "a.b.Localhost.",
+            "x.localhost",
+        ] {
             assert!(is_local_name(name), "{name}");
         }
-        for name in ["example.com", "localhost.example.com", "notlocalhost", "mylocalhost", "localhost.evil.com.", ""] {
+        for name in [
+            "example.com",
+            "localhost.example.com",
+            "notlocalhost",
+            "mylocalhost",
+            "localhost.evil.com.",
+            "",
+        ] {
             assert!(!is_local_name(name), "{name}");
         }
     }
@@ -207,7 +280,9 @@ mod tests {
     ];
 
     fn reference_is_public(ip: u32) -> bool {
-        !REFERENCE.iter().any(|&(net, prefix)| ip >> (32 - prefix) == net >> (32 - prefix))
+        !REFERENCE
+            .iter()
+            .any(|&(net, prefix)| ip >> (32 - prefix) == net >> (32 - prefix))
     }
 
     proptest! {

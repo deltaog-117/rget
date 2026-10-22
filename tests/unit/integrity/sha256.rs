@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 use rget::features::integrity::{compute_sha256, verify_sha256, Error};
 use std::path::PathBuf;
 
@@ -32,8 +31,14 @@ fn temp_file(name: &str, contents: &[u8]) -> PathBuf {
 fn hashes_match_known_vectors() {
     let hello = temp_file("hello", b"hello rget\n");
     let empty = temp_file("empty", b"");
-    assert_eq!(compute_sha256(hello.to_str().unwrap()).unwrap(), HELLO_SHA256);
-    assert_eq!(compute_sha256(empty.to_str().unwrap()).unwrap(), EMPTY_SHA256);
+    assert_eq!(
+        compute_sha256(hello.to_str().unwrap()).unwrap(),
+        HELLO_SHA256
+    );
+    assert_eq!(
+        compute_sha256(empty.to_str().unwrap()).unwrap(),
+        EMPTY_SHA256
+    );
     std::fs::remove_file(hello).unwrap();
     std::fs::remove_file(empty).unwrap();
 }
@@ -96,9 +101,18 @@ fn a_whole_line_of_sha256sum_output_is_accepted() {
 #[test]
 fn a_malformed_expected_digest_is_refused_before_the_file_is_read() {
     // The path does not exist: if the file were read first, this would be an I/O error.
-    for bad in ["", "deadbeef", &"g".repeat(64), &"a".repeat(63), &"a".repeat(65)] {
+    for bad in [
+        "",
+        "deadbeef",
+        &"g".repeat(64),
+        &"a".repeat(63),
+        &"a".repeat(65),
+    ] {
         assert!(
-            matches!(verify_sha256("/definitely/not/here", bad), Err(Error::InvalidDigest(_))),
+            matches!(
+                verify_sha256("/definitely/not/here", bad),
+                Err(Error::InvalidDigest(_))
+            ),
             "{bad:?}"
         );
     }

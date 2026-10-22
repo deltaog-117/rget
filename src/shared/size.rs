@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 //! Human-readable byte sizes.
 
 /// Parse human-readable size strings like "500k", "2M", "1G" (or "0" for no limit)
@@ -46,7 +45,9 @@ pub fn parse_size(s: &str) -> Result<usize, String> {
         (num_str, suffix.to_lowercase())
     };
 
-    let num: f64 = num_str.parse().map_err(|_| format!("Invalid number: {}", num_str))?;
+    let num: f64 = num_str
+        .parse()
+        .map_err(|_| format!("Invalid number: {}", num_str))?;
 
     let bytes = match suffix.as_str() {
         "" => num,

@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 use rget::shared::size::{format_size, parse_size};
 
 #[test]
@@ -49,8 +48,14 @@ fn fractions_and_surrounding_whitespace_are_accepted() {
 #[test]
 fn malformed_sizes_are_rejected_with_a_reason() {
     assert_eq!(parse_size(""), Err("Empty size string".to_string()));
-    assert_eq!(parse_size("abc"), Err("Invalid size format: abc".to_string()));
-    assert_eq!(parse_size("12zz"), Err("Unknown size suffix: zz".to_string()));
+    assert_eq!(
+        parse_size("abc"),
+        Err("Invalid size format: abc".to_string())
+    );
+    assert_eq!(
+        parse_size("12zz"),
+        Err("Unknown size suffix: zz".to_string())
+    );
     assert_eq!(
         parse_size("0.5"),
         Err("Rate limit must be at least 1 byte".to_string())
