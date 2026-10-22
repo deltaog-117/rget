@@ -2,6 +2,12 @@
 name = "rget"
 version = "1.0.0"
 edition = "2021"
+description = "A safe, modern HTTP/HTTPS downloader for Linux"
+authors = ["deltaog-117"]
+license = "GPL-3.0-or-later"
+readme = "README.md"
+keywords = ["download", "http", "cli", "wget", "ssrf"]
+categories = ["command-line-utilities", "network-programming"]
 
 [dependencies]
 reqwest = { version = "0.12", features = ["rustls-tls", "stream", "json", "blocking"] }

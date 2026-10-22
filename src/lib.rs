@@ -17,7 +17,7 @@
 
 //! rget: a safe, modern downloader for Linux.
 //!
-//! The binary in `main.rs` is a thin shell around [`app::run`]. The logic lives here so
+//! The binary in `main.rs` is a thin shell around [`mod@app::run`]. The logic lives here so
 //! that `tests/` can exercise the public API.
 
 pub mod app;

@@ -48,7 +48,7 @@ pub fn install() {
 /// runs in the same process, so flipping it in a unit test would race every other test
 /// that streams a download body through [`super::super::features::download`]. The
 /// behaviour it gates (`stream::copy` stopping between chunks) is exercised instead by
-/// [`super::super::features::download::stream`]'s own tests, with the flag left alone.
+/// the tests of `features::download::stream`, with the flag left alone.
 pub fn requested() -> bool {
     INTERRUPTED.load(Ordering::SeqCst)
 }
