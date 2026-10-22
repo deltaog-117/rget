@@ -3,7 +3,7 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Rust](https://img.shields.io/badge/rust-1.96%2B-orange.svg)](https://www.rust-lang.org/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/YOUR_USERNAME/rget/releases)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/YOUR_USERNAME/rget/releases)
 
 **A memory‑safe, self‑contained replacement for `wget` and `curl` for everyday HTTP/HTTPS downloads, written in Rust.**
 
@@ -269,10 +269,13 @@ rget is built with security as a priority:
 - **Memory‑safe** — No `unsafe` code
 - **URL checks** — Only `http`/`https`; refuses path traversal, well-known secret-file paths and hostnames no DNS name can contain. The checks look at what a URL *means* once parsed, so legitimate URLs (`?a=1&b=2`, `file(1).zip`) are never refused
 - **TLS hardening** — Uses `rustls` with modern cipher suites
-- **Private address blocking** — Prevents SSRF: loopback, private, link-local and reserved addresses are refused in the URL, in redirects, and in what a name resolves to (checked at connection time, so DNS rebinding cannot swap the address). A configured system proxy does its own DNS and is outside this check
+- **Private address blocking** — Prevents SSRF: loopback, private, link-local and reserved addresses are refused in the URL, in redirects, and in what a name resolves to (checked at connection time, so DNS rebinding cannot swap the address). A configured system proxy does its own DNS and is outside this check (see [Known limitation: proxies](#known-limitation-proxies))
 - **Safe file names** — A name taken from a URL is percent-decoded and cleaned (`/`, control characters, a leading `-`, `..`), so it can only ever name a file inside the download directory
 
-### Security Comparison
+### Known limitation: proxies
+
+rget honours the standard proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`). When a request goes through a proxy, the proxy resolves the name and opens the connection, so rget's resolver filter never sees the address it ends up at. Only the checks on the URL as written (a literal loopback or private address) and on each redirect target still apply. A hostname that resolves to a private address, or a DNS-rebinding answer, is therefore **not** caught while a proxy is in use. If you rely on the private-address protection, do not run rget behind a proxy you do not control. Closing this gap is tracked in the roadmap.
+
 
 | Feature | rget | curl | wget |
 |:---|:---|:---|:---|

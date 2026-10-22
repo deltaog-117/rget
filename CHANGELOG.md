@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-22
+
+This is a major release because the default output location changed (see **BREAKING** under Changed).
+
 ### Added
+- Package metadata in `Cargo.toml` (description, license, readme, authors, keywords, categories)
 - Library crate (`src/lib.rs`) alongside the binary, so the public API can be tested from `tests/`
 - Characterization test suite pinning the 1.0.0 behaviour: 16 in-file unit tests, 40 mirrored unit tests (`tests/unit/`), and 11 integration tests that run the real download code against an in-process HTTP server (`tests/integration/`)
 - `DownloadOptions` struct grouping the per-download settings
@@ -29,11 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tests for digest parsing, name claiming, option merging, verification before placement, and a file appearing while a download runs
 - The progress bar now shows a smoothed transfer rate, and a download whose size is unknown ahead of time (no `Content-Length`) gets its own spinner display instead of a bar with a meaningless ETA
 - Ctrl+C is now caught: every download path stops between chunks, prints an interrupt notice once, and exits `130`, leaving the `.part` file and its sidecar in place for `-c` to continue
-- `scripts/check`, a thin wrapper around `cargo clippy -- -D warnings` and `cargo test` (`cargo fmt --check` is left out until roadmap item G formats the existing codebase)
+- `scripts/check`, a thin wrapper around `cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test`
+- `scripts/e2e/`: an end-to-end run of the release binary against a local fixture server that honours `Range` requests (plain, `-O`, `--sha256`, `--segments`, `--if-exists`, blocked private address, 404, bad URL in a batch); see its README
 - Tests for the input-file comment/whitespace handling, the `-j 0` clamp, the permanent-connect-failure classification, and a segmented download whose sibling fails permanently
 - `-d`/`--downloads` (and `downloads` in the config file) saves to the platform Downloads folder; `-P` still wins over it
 
 ### Changed
+- `Cargo.lock` is now committed (rget is a binary crate) and the whole codebase is `rustfmt`-formatted
 - **BREAKING:** with no `-P`, `-O` or `-d`, a download now saves to the current directory instead of `~/Downloads`, matching `wget` and `curl`. Anyone who relied on the old default should add `-d` (or `downloads = true` in `config.toml`) to keep the previous behaviour
 - Restructured the source tree from a flat `src/` into a feature-first layout: `app/` (CLI, config, settings merge, wiring), `features/{download,validation,integrity,input,destination}/`, and `shared/` (progress bar, size parsing). `main.rs` is now a thin entry point. No user-visible behaviour change; verified identical to 1.0.0 across 65 end-to-end cases.
 - `RgetError` split into per-feature error types (`download`, `validation`, `integrity`) aggregated by `AppError`; error messages and the `Error: …` output on failure are unchanged
@@ -73,6 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 - The `regex` dependency, no longer needed by URL validation
+- The unused `anyhow` and `digest` dependencies
 
 ### Fixed
 - Two URLs that map to the same file name in one command no longer silently lose one of them (the file used to be replaced by the later URL, or, with `-j`, by whichever finished last)
@@ -105,6 +113,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `-j 0` no longer hangs forever waiting for a result no worker thread was ever started to produce: it is now treated as `1`
 
 ### Security
+- Documented a known limitation: behind a system proxy (`HTTP_PROXY` and friends) the proxy does the DNS lookup, so the resolver-level private-address filter cannot apply; only literal addresses and redirect targets are checked
 - A redirect from an allowed host to a loopback, private or link-local address, and a hostname that resolves to one, used to be followed, so a URL could make rget read an internal service (a local one was read back and written to disk in testing). Both are now refused, including for segmented downloads
 - Nine of fifteen loopback and private spellings passed the old check (`127.0.0.2`, `0.0.0.0`, `169.254.169.254`, `100.64.0.1`, `[::ffff:127.0.0.1]`, `[::ffff:7f00:1]`, `[::]`, `foo.localhost`, `localhost.`); all are now refused
 - Decoding percent-escapes in a URL-derived file name cannot escape the download directory: `..%2f..%2fetc%2fx` is saved as `.._.._etc_x`

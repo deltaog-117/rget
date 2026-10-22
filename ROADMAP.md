@@ -32,6 +32,8 @@ Items are organized by priority, not by timeline.
 - ✅ **Cycle 8 · D6 + D7 + D8 + D10 – low-priority defects that were quick to fix and easy to get wrong**: `-i`/`--input-file` lines are trimmed and a line starting with `#` is treated as a comment, matching `curl`/`wget`; `-j 0` no longer hangs forever (no worker thread would ever have claimed a task) — it is treated as `1`; a connection failure is only retried when it might heal, since a DNS name that does not exist or a certificate that fails validation now fails immediately instead of waiting through `-r`'s backoff for something that cannot succeed (judged by the absence of an OS error number underneath the failure, which is what tells the two apart from an ordinary refused or timed-out connection — `reqwest` itself reports all three alike); and a segment that exhausts its retries now sets a flag its siblings check between chunks, so they stop instead of finishing a transfer whose result is discarded anyway (their part files stay valid for `-c`, exactly as before).
 - ✅ **Cycle 9 · Default output location matches `wget`/`curl`**: with no `-P`, `-O` or `-d`, a download now saves to the current directory instead of `~/Downloads`, matching every other Unix downloader and command-line tool. `-d`/`--downloads` (and `downloads` in the config file) opts back into the platform Downloads folder for anyone who wants it; `-P` still wins over both. This is a breaking change to the 1.0.0 default, called out loudly in the changelog rather than folded quietly into 1.1.0.
 
+- ✅ **Cycle 10 · G – hygiene and the 2.0.0 release**: the unused `anyhow` and `digest` dependencies are gone, `Cargo.lock` is tracked, the codebase is `rustfmt`-formatted and `scripts/check` now runs `cargo fmt --check`, the end-to-end harness lives in `scripts/e2e/` (14 cases against a local `Range`-aware server), and the version is **2.0.0** (semver-major, because Cycle 9 changed the default output directory) with a dated changelog section.
+
 ---
 
 ## 🔥 High Priority (Critical)
@@ -51,11 +53,11 @@ Real-download correctness. Each item is a defect in the 1.0.0 behaviour, marked 
 
 - [ ] **D9 · `--max-time`** – `-t` no longer caps the total transfer (Cycle 1); an optional overall limit could return as its own flag.
 - [ ] **D12 · `Content-Disposition` file names** – honour the name a server suggests, as `curl -J` and `wget --content-disposition` do. Deferred from C3 because the name must be known before the request: resume looks for `name.part` by name, and no-clobber (C4) needs it too. It needs either an extra `HEAD` or `download` choosing the path after the headers, and a decision on how that interacts with `-c`.
-- [ ] **D13 · Proxy-aware host policy** – a configured system proxy (`HTTP_PROXY`) does its own DNS, so the resolver filter cannot police what it connects to; only the literal-address and redirect checks apply. Either document it or refuse to combine a proxy with the default policy.
+- [ ] **D13 · Proxy-aware host policy** – a configured system proxy (`HTTP_PROXY`) does its own DNS, so the resolver filter cannot police what it connects to; only the literal-address and redirect checks apply. **Documented** in the README ("Known limitation: proxies") and the changelog; still open: refuse to combine a proxy with the default policy, or check what the proxy connects to.
 - [ ] **D14 · Digests for several URLs** – `--sha256` applies to a single URL. A `sha256sum`-style checksum file (`--checksum-file`) would verify a whole batch, and could reuse the verifier hook added in Cycle 6.
 - [ ] **D15 · Renaming and segment files** – when numbering a name, an in-progress single-connection download (`name.part`) is respected but the segmented parts (`name.part0`, …) are not looked for. Only matters when two segmented downloads target the same name at once.
 - [ ] **D11 · Opt-out for the secret-file list** – `.bashrc`, `.zshrc` and the other listed paths are refused even when downloading a dotfile from a dotfiles repository is exactly what is wanted. An explicit flag, alongside C2's `--allow-private`, would keep the default and allow the exception.
-- [ ] **G · Project hygiene and release** – remove the unused dependencies (`anyhow` and the `digest` crate; nothing uses either), stop ignoring and commit `Cargo.lock` (this is a binary crate), run `cargo fmt` as its own commit, commit the end-to-end harness (`scripts/e2e/`) with a short README, bump the version to 1.1.0 and cut a dated release section in the changelog. The options-struct part is done (`DownloadOptions`), and `regex` was removed in Cycle 4. Cycle 5 added `tokio` (already in the dependency tree through `reqwest`) for the DNS filter. Existing code is not `rustfmt`-formatted; run `cargo fmt` as its own commit so blame stays readable. `scripts/check` (Cycle 8) deliberately leaves `cargo fmt --check` out until this lands.
+- ✅ **G · Project hygiene and release** – done in Cycle 10 (see Completed).
 
 ---
 
@@ -73,5 +75,4 @@ Ideas only; none are committed.
 
 ## 🎯 Next Actions (Immediate)
 
-1. **Cycle 10 – G, the release**: remove the unused dependencies, track `Cargo.lock`, `cargo fmt`, commit the end-to-end harness, bump the version, and turn `[Unreleased]` into a dated release section. Everything in the high- and medium-priority groups is done, Cycles 7–8 cleared D1–D8 and D10, and Cycle 9 changed the default output location (a breaking change), so this release is semver-major, not `1.1.0`.
-2. **Then**: the remaining low-priority items (D9, D11–D15), in whatever order is most useful.
+1. Pick from the remaining low-priority items (D9, D11–D15) or the leftover F tests (a `parse_size` property test, and a throughput gate if CI is added), in whatever order is most useful.

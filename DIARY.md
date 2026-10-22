@@ -1450,3 +1450,55 @@ through its own flag.
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-09-25 | Initial entry | deltaog-117 |
+
+---
+
+### Cycle 10: Release Number — 2.0.0, not 1.1.0
+
+**Date:** 2026-10-22
+**Status:** ✅ Confirmed
+
+---
+
+#### Context / Background
+
+The roadmap had planned the next release as `1.1.0`. Cycle 9 then changed the default output directory from `~/Downloads` to the current directory, which changes where files land for anyone running a 1.0.0 invocation unchanged. The question was which version number to give the release that carries it.
+
+---
+
+#### Options Considered
+
+**Option A: `1.1.0` (minor)**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Matches the number already written in the roadmap |
+| **Disadvantages** | • Semver says a minor release does not break existing use; this one does <br> • A script upgrading automatically would silently change where files go |
+| **Implementation Difficulty** | None |
+| **Fit with Constraints** | Poor |
+
+**Option B: `2.0.0` (major)**
+
+| Aspect | Assessment |
+|--------|------------|
+| **Advantages** | • Honest about the breaking default <br> • The changelog can say so in the version heading, not only in a bullet |
+| **Disadvantages** | • A large number for a small change; the "major" is entirely the one default |
+| **Implementation Difficulty** | None |
+| **Fit with Constraints** | Best |
+
+---
+
+#### Decision & Rationale
+
+**Chosen Option:** B. The release is `2.0.0` dated 2026-10-22, with a one-line note under its heading pointing at the breaking change. The end-to-end harness (`scripts/e2e/`) is a Tier 3 check, run before a release, and is deliberately not part of `scripts/check`: it starts a server and a release build, which is too heavy for every loop.
+
+**Trade-offs accepted:**
+- A major number for one changed default; the alternative was understating a break.
+
+---
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-10-22 | Initial entry | deltaog-117 |
