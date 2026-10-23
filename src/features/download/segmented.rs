@@ -30,7 +30,7 @@ use super::partial::{Finished, PartMeta, Target};
 use super::parts;
 use super::resume::parse_content_range;
 use super::retry;
-use super::stream;
+use super::stream::{self, Deadline};
 use super::throttle::Throttle;
 use crate::shared::address::HostPolicy;
 use crate::shared::progress::ProgressBarWrapper;
@@ -47,6 +47,7 @@ use std::thread;
 struct Shared {
     url: String,
     timeout: u64,
+    deadline: Option<Deadline>,
     follow_redirects: bool,
     host_policy: HostPolicy,
     user_agent: Option<String>,
@@ -158,6 +159,7 @@ fn fetch_segment(
         &mut throttle,
         shared.timeout,
         Some(&shared.cancelled),
+        shared.deadline,
         |n| {
             if let Some(ref bar) = shared.progress {
                 bar.inc(n);
@@ -185,6 +187,7 @@ pub(super) fn download(
     url: &str,
     output_path: &str,
     options: &DownloadOptions,
+    deadline: Option<Deadline>,
     multi_progress: Option<&MultiProgress>,
 ) -> Result<Outcome> {
     let quiet = options.quiet;
@@ -212,7 +215,7 @@ pub(super) fn download(
                     e
                 );
             }
-            return super::download_single(url, output_path, options, multi_progress);
+            return super::download_single(url, output_path, options, deadline, multi_progress);
         }
     };
 
@@ -224,7 +227,7 @@ pub(super) fn download(
                 head_response.status()
             );
         }
-        return super::download_single(url, output_path, options, multi_progress);
+        return super::download_single(url, output_path, options, deadline, multi_progress);
     }
 
     let total_size = head_response
@@ -240,7 +243,7 @@ pub(super) fn download(
         if !quiet {
             eprintln!("⚠️  Content-Length header missing or zero; falling back to single-thread.");
         }
-        return super::download_single(url, output_path, options, multi_progress);
+        return super::download_single(url, output_path, options, deadline, multi_progress);
     }
 
     let accept_ranges = head_response
@@ -254,7 +257,7 @@ pub(super) fn download(
         if !quiet {
             eprintln!("⚠️  Server does not support range requests; falling back to single-thread.");
         }
-        return super::download_single(url, output_path, options, multi_progress);
+        return super::download_single(url, output_path, options, deadline, multi_progress);
     }
 
     let ranges = parts::plan_ranges(total_size, segments);
@@ -273,7 +276,7 @@ pub(super) fn download(
         if !quiet {
             eprintln!("⚠️  Invalid range calculation; falling back to single-thread.");
         }
-        return super::download_single(url, output_path, options, multi_progress);
+        return super::download_single(url, output_path, options, deadline, multi_progress);
     }
 
     // What the probe says the remote file is, and the layout we are about to use.
@@ -318,6 +321,7 @@ pub(super) fn download(
     let shared = Arc::new(Shared {
         url: url.to_string(),
         timeout: options.timeout,
+        deadline,
         follow_redirects: options.follow_redirects,
         host_policy: options.host_policy,
         user_agent: options.user_agent.clone(),
@@ -391,7 +395,7 @@ pub(super) fn download(
         }
         parts::discard_parts(output_path, 0);
         let _ = fs::remove_file(target.meta_path());
-        return super::download_single(url, output_path, options, multi_progress);
+        return super::download_single(url, output_path, options, deadline, multi_progress);
     }
 
     // The parts and the sidecar stay on disk, so `-c` can continue from them.

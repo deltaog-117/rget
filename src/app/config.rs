@@ -25,6 +25,7 @@ use std::path::PathBuf;
 #[derive(Debug, Deserialize, Serialize, Default)]
 pub struct Config {
     pub timeout: Option<u64>,
+    pub max_time: Option<u64>,
     pub retries: Option<u32>,
     pub user_agent: Option<String>,
     pub quiet: Option<bool>,
@@ -99,6 +100,7 @@ impl Config {
 # CLI arguments override these values
 
 timeout = 30
+# max_time = 3600        # overall limit in seconds per download; unset or 0 means no limit
 retries = 0
 # user_agent = "rget/1.0"
 quiet = false

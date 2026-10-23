@@ -23,7 +23,7 @@ use super::options::DownloadOptions;
 use super::outcome::Outcome;
 use super::partial::{Finished, PartMeta, Source, Target};
 use super::resume::{self, Plan, Reply};
-use super::stream;
+use super::stream::{self, Deadline};
 use super::throttle::Throttle;
 use crate::shared::progress::ProgressBarWrapper;
 use indicatif::MultiProgress;
@@ -36,6 +36,7 @@ struct Job<'a> {
     url: &'a str,
     output_path: &'a str,
     options: &'a DownloadOptions,
+    deadline: Option<Deadline>,
     target: &'a Target,
     multi_progress: Option<&'a MultiProgress>,
 }
@@ -49,6 +50,7 @@ pub(super) fn attempt(
     url: &str,
     output_path: &str,
     options: &DownloadOptions,
+    deadline: Option<Deadline>,
     attempt_index: usize,
     multi_progress: Option<&MultiProgress>,
 ) -> Result<Outcome> {
@@ -77,6 +79,7 @@ pub(super) fn attempt(
         url,
         output_path,
         options,
+        deadline,
         target: &target,
         multi_progress,
     };
@@ -229,6 +232,7 @@ fn fetch(
         &mut throttle,
         options.timeout,
         None,
+        job.deadline,
         |n| {
             if let Some(ref p) = progress {
                 p.inc(n);

@@ -21,9 +21,36 @@ use super::error::{Error, Result};
 use super::throttle::Throttle;
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 /// Size of the single buffer a download reuses for its whole life.
 const BUFFER_SIZE: usize = 64 * 1024;
+
+/// The moment `--max-time` runs out, fixed once per download so that retries, segments and a
+/// fallback to one connection all share a single budget.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Deadline {
+    at: Instant,
+    secs: u64,
+}
+
+impl Deadline {
+    pub(super) fn after(secs: u64) -> Self {
+        Self {
+            at: Instant::now() + Duration::from_secs(secs),
+            secs,
+        }
+    }
+
+    /// `Err(TimeLimit)` once the budget is spent.
+    pub(super) fn check(self) -> Result<()> {
+        if Instant::now() >= self.at {
+            Err(Error::TimeLimit(self.secs))
+        } else {
+            Ok(())
+        }
+    }
+}
 
 /// Copies `reader` to `writer` until end of input and returns the byte count.
 ///
@@ -32,14 +59,16 @@ const BUFFER_SIZE: usize = 64 * 1024;
 /// when the transport reports that a read timed out. `cancelled`, when given, is checked
 /// alongside the global Ctrl+C flag between chunks; a segmented download uses it to stop a
 /// segment as soon as a sibling has already failed for good, instead of finishing a
-/// transfer whose result will be discarded anyway.
+/// transfer whose result will be discarded anyway. `deadline`, when given, is checked at the
+/// same points.
 ///
 /// # Errors
 ///
 /// A read failure becomes [`Error::Stalled`] (timeout), [`Error::Network`] (any other
 /// transport error) or [`Error::Io`]; a write failure is always [`Error::Io`]. Pressing
 /// Ctrl+C is noticed between chunks and becomes [`Error::Interrupted`]; `cancelled` becoming
-/// set is noticed the same way and becomes [`Error::Cancelled`]. Either way, whatever was
+/// set is noticed the same way and becomes [`Error::Cancelled`]; a spent `deadline` becomes
+/// [`Error::TimeLimit`]. In every case, whatever was
 /// already written is left in place.
 pub(super) fn copy<R, W, F>(
     reader: &mut R,
@@ -47,6 +76,7 @@ pub(super) fn copy<R, W, F>(
     throttle: &mut Throttle,
     stall_secs: u64,
     cancelled: Option<&AtomicBool>,
+    deadline: Option<Deadline>,
     mut on_chunk: F,
 ) -> Result<u64>
 where
@@ -63,6 +93,9 @@ where
         }
         if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
             return Err(Error::Cancelled);
+        }
+        if let Some(deadline) = deadline {
+            deadline.check()?;
         }
 
         let want = throttle.read_size(buffer.len());
@@ -156,7 +189,7 @@ mod tests {
             let mut out = Vec::new();
             let mut reported = 0u64;
 
-            let total = copy(&mut reader, &mut out, &mut Throttle::new(None), 30, None, |n| reported += n).unwrap();
+            let total = copy(&mut reader, &mut out, &mut Throttle::new(None), 30, None, None, |n| reported += n).unwrap();
 
             prop_assert_eq!(&out, &data);
             prop_assert_eq!(total, data.len() as u64);
@@ -188,6 +221,7 @@ mod tests {
                 &mut Throttle::new(None),
                 30,
                 None,
+                None,
                 |_| {}
             )
             .unwrap(),
@@ -203,6 +237,7 @@ mod tests {
             &mut Vec::new(),
             &mut Throttle::new(None),
             30,
+            None,
             None,
             |_| {},
         )
@@ -223,6 +258,7 @@ mod tests {
             &mut FullDisk,
             &mut Throttle::new(None),
             30,
+            None,
             None,
             |_| {},
         )
@@ -245,6 +281,7 @@ mod tests {
             &mut Throttle::new(None),
             30,
             Some(&cancelled),
+            None,
             |_| {},
         )
         .unwrap_err();
@@ -267,6 +304,52 @@ mod tests {
             &mut Throttle::new(None),
             30,
             Some(&cancelled),
+            None,
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(total, 100);
+    }
+
+    #[test]
+    fn a_spent_deadline_stops_the_copy_before_reading() {
+        let mut reader = ChunkedReader {
+            data: vec![1; 100],
+            position: 0,
+            sizes: vec![10],
+            turn: 0,
+        };
+        let mut out = Vec::new();
+        let err = copy(
+            &mut reader,
+            &mut out,
+            &mut Throttle::new(None),
+            30,
+            None,
+            Some(Deadline::after(0)),
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::TimeLimit(0)));
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn a_distant_deadline_does_not_stop_the_copy() {
+        let mut reader = ChunkedReader {
+            data: vec![1; 100],
+            position: 0,
+            sizes: vec![10],
+            turn: 0,
+        };
+        let mut out = Vec::new();
+        let total = copy(
+            &mut reader,
+            &mut out,
+            &mut Throttle::new(None),
+            30,
+            None,
+            Some(Deadline::after(3600)),
             |_| {},
         )
         .unwrap();

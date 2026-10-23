@@ -142,6 +142,9 @@ pub fn run() -> Result<()> {
     if !quiet && args.verbose > 0 {
         eprintln!("🔍 Downloading {} URL(s)", tasks.len());
         eprintln!("⏱️  Timeout: {}s", settings.timeout);
+        if let Some(max_time) = settings.max_time {
+            eprintln!("⌛ Max time: {}s", max_time);
+        }
         if settings.resume {
             eprintln!("🔄 Resume: enabled");
         }

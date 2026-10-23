@@ -33,6 +33,7 @@ Items are organized by priority, not by timeline.
 - ✅ **Cycle 9 · Default output location matches `wget`/`curl`**: with no `-P`, `-O` or `-d`, a download now saves to the current directory instead of `~/Downloads`, matching every other Unix downloader and command-line tool. `-d`/`--downloads` (and `downloads` in the config file) opts back into the platform Downloads folder for anyone who wants it; `-P` still wins over both. This is a breaking change to the 1.0.0 default, called out loudly in the changelog rather than folded quietly into 1.1.0.
 
 - ✅ **Cycle 10 · G – hygiene and the 2.0.0 release**: the unused `anyhow` and `digest` dependencies are gone, `Cargo.lock` is tracked, the codebase is `rustfmt`-formatted and `scripts/check` now runs `cargo fmt --check`, the end-to-end harness lives in `scripts/e2e/` (14 cases against a local `Range`-aware server), and the version is **2.0.0** (semver-major, because Cycle 9 changed the default output directory) with a dated changelog section.
+- ✅ **Cycle 11 · D9 – `--max-time`**: an optional overall limit per download (`--max-time <secs>`, `max_time` in the config file, `0` for none). One deadline starts when the download starts and is shared by retries, segments and the single-connection fallback; it is checked between chunks and before each retry, ends in a `TimeLimit` error that is never retried, and leaves the `.part` data in place for `-c`. `-t` keeps meaning connect and stall limit.
 
 ---
 
@@ -51,7 +52,6 @@ Real-download correctness. Each item is a defect in the 1.0.0 behaviour, marked 
 
 ## 🟢 Low Priority (Nice‑to‑Have)
 
-- [ ] **D9 · `--max-time`** – `-t` no longer caps the total transfer (Cycle 1); an optional overall limit could return as its own flag.
 - [ ] **D12 · `Content-Disposition` file names** – honour the name a server suggests, as `curl -J` and `wget --content-disposition` do. Deferred from C3 because the name must be known before the request: resume looks for `name.part` by name, and no-clobber (C4) needs it too. It needs either an extra `HEAD` or `download` choosing the path after the headers, and a decision on how that interacts with `-c`.
 - [ ] **D13 · Proxy-aware host policy** – a configured system proxy (`HTTP_PROXY`) does its own DNS, so the resolver filter cannot police what it connects to; only the literal-address and redirect checks apply. **Documented** in the README ("Known limitation: proxies") and the changelog; still open: refuse to combine a proxy with the default policy, or check what the proxy connects to.
 - [ ] **D14 · Digests for several URLs** – `--sha256` applies to a single URL. A `sha256sum`-style checksum file (`--checksum-file`) would verify a whole batch, and could reuse the verifier hook added in Cycle 6.
@@ -75,4 +75,4 @@ Ideas only; none are committed.
 
 ## 🎯 Next Actions (Immediate)
 
-1. Pick from the remaining low-priority items (D9, D11–D15) or the leftover F tests (a `parse_size` property test, and a throughput gate if CI is added), in whatever order is most useful.
+1. Pick from the remaining low-priority items (D11–D15) or the leftover F tests (a `parse_size` property test, and a throughput gate if CI is added), in whatever order is most useful.

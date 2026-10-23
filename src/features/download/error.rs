@@ -43,6 +43,11 @@ pub enum Error {
     #[error("Timed out: no data received for {0}s")]
     Stalled(u64),
 
+    /// `--max-time` ran out. The partial data is left on disk exactly like any other stopped
+    /// transfer, so `-c` picks it up again.
+    #[error("Time limit exceeded: the download took longer than {0}s")]
+    TimeLimit(u64),
+
     /// The finished download was refused by the caller's [`Verifier`](super::Verifier) and
     /// discarded.
     #[error("Verification failed: {0}")]

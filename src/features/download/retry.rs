@@ -45,6 +45,7 @@ pub(super) fn is_retryable(error: &Error) -> bool {
         | Error::RangesUnsupported(_)
         | Error::BlockedAddress(_)
         | Error::Verification(_)
+        | Error::TimeLimit(_)
         | Error::Interrupted
         | Error::Cancelled => false,
     }
@@ -184,6 +185,7 @@ mod tests {
         assert!(!is_retryable(&Error::Verification("bad digest".into())));
         assert!(!is_retryable(&Error::Interrupted));
         assert!(!is_retryable(&Error::Cancelled));
+        assert!(!is_retryable(&Error::TimeLimit(60)));
     }
 
     #[test]

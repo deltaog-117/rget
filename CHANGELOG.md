@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `--max-time <secs>` (and `max_time` in the config file): an overall time limit for each download, retries included. When it runs out the download stops with a `Time limit exceeded` error, is not retried, and keeps its `.part` data so `-c` can continue it. `0` means no limit. `-t` stays a connect and stall limit
+
 ## [2.0.0] - 2026-10-22
 
 This is a major release because the default output location changed (see **BREAKING** under Changed).

@@ -63,6 +63,7 @@ fn options(limit_rate: Option<usize>) -> DownloadOptions {
     DownloadOptions {
         resume: false,
         timeout: 30,
+        max_time: None,
         follow_redirects: true,
         user_agent: None,
         retries: 0,

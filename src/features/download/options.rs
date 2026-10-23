@@ -79,6 +79,9 @@ impl fmt::Debug for OnOccupied {
 pub struct DownloadOptions {
     pub resume: bool,
     pub timeout: u64,
+    /// Overall limit in seconds for one URL, retries included; `None` means no limit. Unlike
+    /// `timeout` it caps the total transfer time.
+    pub max_time: Option<u64>,
     pub follow_redirects: bool,
     pub user_agent: Option<String>,
     pub retries: u32,

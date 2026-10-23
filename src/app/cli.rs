@@ -82,6 +82,11 @@ pub struct Args {
     #[arg(short = 't', long)]
     pub timeout: Option<u64>,
 
+    /// Overall time limit in seconds for each download, retries included. Partial data is kept
+    /// for -c. Use 0 for no limit (default: no limit)
+    #[arg(long)]
+    pub max_time: Option<u64>,
+
     /// Follow redirects (default: true)
     #[arg(long)]
     pub follow_redirects: Option<bool>,

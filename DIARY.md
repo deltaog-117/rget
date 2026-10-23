@@ -27,6 +27,7 @@
 | 2026-09-25 | Handling Ctrl+C | `ctrlc` crate + one shared flag checked in `stream::copy` | ✅ Confirmed |
 | 2026-09-25 | Cancelling sibling segments | Shared `AtomicBool`, set on any segment's terminal failure, checked in `stream::copy` | ✅ Confirmed |
 | 2026-09-25 | Default output location | Current directory (matches `wget`/`curl`); `-d`/`--downloads` opts into `~/Downloads` | ✅ Confirmed |
+| 2026-10-23 | Overall time limit (`--max-time`) | One deadline per URL, shared by retries and segments, checked in `stream::copy` | ✅ Confirmed |
 
 ---
 
@@ -1502,3 +1503,37 @@ The roadmap had planned the next release as `1.1.0`. Cycle 9 then changed the de
 | Date | Update | Author |
 |------|--------|--------|
 | 2026-10-22 | Initial entry | deltaog-117 |
+
+---
+
+### Cycle 11: Overall Time Limit — `--max-time` (D9)
+
+**Date:** 2026-10-23
+**Status:** ✅ Confirmed
+
+---
+
+#### Context / Background
+
+Cycle 1 turned `-t` into a connect and stall limit, so nothing capped the total time of a transfer any more. D9 asked for that cap to return as its own flag. The open questions were what the limit covers (one attempt, or the whole URL with its retries) and where it is enforced.
+
+---
+
+#### Decision & Rationale
+
+**Chosen Option:** `--max-time <secs>` (and `max_time` in the config file), a limit per URL that starts when `download_file` is called and is shared by every retry, every segment and the fallback to one connection. It is a `Deadline` value in `stream.rs`, checked between chunks next to the Ctrl+C and sibling-cancel flags, and once before each retry attempt, so a backoff sleep that used up the budget does not open another request. `0` means no limit, as with `--limit-rate`.
+
+When it runs out the error is `TimeLimit`, which is never retried: asking for a cap and then retrying past it would defeat the flag. Like Ctrl+C, it leaves `name.part` and its sidecar in place, so `-c` continues the transfer later.
+
+**Trade-offs accepted:**
+- The limit is noticed between chunks, so a read already waiting can overrun it by up to `-t` seconds, and connecting is bounded by `-t` alone. Capping the client timeout to the time left would close that gap, at the cost of threading the remaining time into every client build.
+- With `-j`, each URL gets its own budget rather than the whole run sharing one.
+- Segmented downloads share the code path but have no dedicated integration test; the deadline is exercised through the single-connection path and the `stream::copy` unit tests.
+
+---
+
+#### Review / Update Log
+
+| Date | Update | Author |
+|------|--------|--------|
+| 2026-10-23 | Initial entry | deltaog-117 |

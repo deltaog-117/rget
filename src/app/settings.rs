@@ -27,6 +27,8 @@ use crate::shared::address::HostPolicy;
 #[derive(Debug)]
 pub struct Settings {
     pub timeout: u64,
+    /// Overall limit per download in seconds; `None` means no limit (`0` is folded into it).
+    pub max_time: Option<u64>,
     pub retries: u32,
     pub user_agent: Option<String>,
     pub quiet: bool,
@@ -76,6 +78,7 @@ impl Settings {
         };
         Self {
             timeout: args.timeout.unwrap_or_else(|| config.timeout.unwrap_or(30)),
+            max_time: args.max_time.or(config.max_time).filter(|&secs| secs > 0),
             retries: args.retries.unwrap_or_else(|| config.retries.unwrap_or(0)),
             user_agent: args
                 .user_agent
@@ -120,6 +123,7 @@ impl Settings {
         DownloadOptions {
             resume: self.resume,
             timeout: self.timeout,
+            max_time: self.max_time,
             follow_redirects: self.follow_redirects,
             user_agent: self.user_agent.clone(),
             retries: self.retries,

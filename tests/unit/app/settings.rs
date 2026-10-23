@@ -186,3 +186,32 @@ fn a_malformed_digest_is_a_usage_error_before_any_download() {
         );
     }
 }
+
+// ---- --max-time ---------------------------------------------------------------------------
+
+fn max_time(extra: &[&str], config: &Config) -> Option<u64> {
+    Settings::resolve(&args(extra), config).max_time
+}
+
+#[test]
+fn there_is_no_overall_limit_unless_asked_for() {
+    assert_eq!(max_time(&[], &Config::default()), None);
+}
+
+#[test]
+fn the_command_line_beats_the_config_file_for_max_time() {
+    let cfg = config("max_time = 120");
+    assert_eq!(max_time(&[], &cfg), Some(120));
+    assert_eq!(max_time(&["--max-time", "30"], &cfg), Some(30));
+}
+
+#[test]
+fn a_max_time_of_zero_means_no_limit() {
+    assert_eq!(max_time(&["--max-time", "0"], &Config::default()), None);
+    assert_eq!(max_time(&[], &config("max_time = 0")), None);
+    // An explicit 0 on the command line also lifts a limit set in the config file.
+    assert_eq!(
+        max_time(&["--max-time", "0"], &config("max_time = 120")),
+        None
+    );
+}

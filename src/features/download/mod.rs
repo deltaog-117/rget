@@ -40,25 +40,30 @@ pub use outcome::Outcome;
 pub use pool::run_pool;
 
 use indicatif::MultiProgress;
+use stream::Deadline;
 
 /// Downloads `url` to `output_path`, splitting it into `options.segments`
 /// parallel ranges when that is greater than one.
 ///
 /// # Errors
 ///
-/// Returns the last error once every attempt (`options.retries + 1`) has failed, or
-/// [`Error::Verification`] when `options.verify` refuses the finished file.
+/// Returns the last error once every attempt (`options.retries + 1`) has failed,
+/// [`Error::Verification`] when `options.verify` refuses the finished file, or
+/// [`Error::TimeLimit`] when `options.max_time` runs out (partial data is kept for `-c`).
 pub fn download_file(
     url: &str,
     output_path: &str,
     options: &DownloadOptions,
     multi_progress: Option<&MultiProgress>,
 ) -> Result<Outcome> {
+    // Started here so the whole call, retries and fallbacks included, shares one budget.
+    let deadline = options.max_time.map(Deadline::after);
+
     if options.segments > 1 {
-        return segmented::download(url, output_path, options, multi_progress);
+        return segmented::download(url, output_path, options, deadline, multi_progress);
     }
 
-    download_single(url, output_path, options, multi_progress)
+    download_single(url, output_path, options, deadline, multi_progress)
 }
 
 /// Single-connection download with the retry loop. Also the fallback whenever a
@@ -67,9 +72,14 @@ fn download_single(
     url: &str,
     output_path: &str,
     options: &DownloadOptions,
+    deadline: Option<Deadline>,
     multi_progress: Option<&MultiProgress>,
 ) -> Result<Outcome> {
     retry::run(options.retries, options.quiet, "", |attempt| {
-        single::attempt(url, output_path, options, attempt, multi_progress)
+        // A backoff sleep may have used up what was left; don't start a request for nothing.
+        if let Some(deadline) = deadline {
+            deadline.check()?;
+        }
+        single::attempt(url, output_path, options, deadline, attempt, multi_progress)
     })
 }

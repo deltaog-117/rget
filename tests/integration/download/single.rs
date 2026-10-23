@@ -205,6 +205,53 @@ fn a_stalled_transfer_fails_after_the_timeout() {
 }
 
 #[test]
+fn max_time_caps_a_transfer_that_keeps_flowing_and_keeps_the_partial_data() {
+    // Three seconds of trickling against a one second cap, with retries on: the cap is final.
+    let base = serve(payload(100_000), true);
+    let dir = scratch_dir("single-max-time");
+    let out = dir.join("out.bin");
+    let mut opts = options();
+    opts.max_time = Some(1);
+    opts.retries = 2;
+
+    let started = std::time::Instant::now();
+    let err = download_file(
+        &format!("{base}/trickle"),
+        out.to_str().unwrap(),
+        &opts,
+        None,
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, Error::TimeLimit(1)), "got {err:?}");
+    assert!(started.elapsed() < std::time::Duration::from_millis(2500));
+    assert!(
+        !out.exists(),
+        "an unfinished download must not take the final name"
+    );
+    assert!(
+        dir.join("out.bin.part").exists(),
+        "the partial data stays for -c"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_max_time_that_is_not_reached_changes_nothing() {
+    let data = payload(100_000);
+    let base = serve(data.clone(), true);
+    let dir = scratch_dir("single-max-time-ok");
+    let out = dir.join("out.bin");
+    let mut opts = options();
+    opts.max_time = Some(60);
+
+    download_file(&format!("{base}/file"), out.to_str().unwrap(), &opts, None).unwrap();
+
+    assert_eq!(std::fs::read(&out).unwrap(), data);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn the_rate_limit_slows_the_transfer() {
     let data = payload(200_000);
     let base = serve(data.clone(), true);

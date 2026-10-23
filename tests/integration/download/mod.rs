@@ -66,6 +66,7 @@ pub(crate) fn options() -> DownloadOptions {
     DownloadOptions {
         resume: false,
         timeout: 10,
+        max_time: None,
         follow_redirects: true,
         user_agent: None,
         retries: 0,

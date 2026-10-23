@@ -152,6 +152,12 @@ cat urls.txt | rget -i -
 rget --limit-rate 1M https://example.com/large-file.iso
 ```
 
+### Give up after an overall time limit
+```bash
+rget --max-time 600 https://example.com/large-file.iso
+```
+`-t` only limits connecting and each pause in the data, so a slow but steady download can run for hours. `--max-time` caps the whole download, retries included. When it runs out the partial data is kept, so `-c` continues it later. `0` means no limit.
+
 ### Retry up to 3 times on failure
 ```bash
 rget -r 3 https://example.com/unstable-file.zip
@@ -197,6 +203,7 @@ Create `~/.config/rget/config.toml` with defaults:
 # CLI arguments override these values
 
 timeout = 30              # Connect timeout and longest pause in the data, in seconds
+# max_time = 3600         # Overall limit per download in seconds; unset or 0 means no limit
 retries = 0               # Number of retries on failure
 # user_agent = "rget/1.0" # Custom user-agent (uncomment to set)
 quiet = false             # Quiet mode (suppress progress bars)
